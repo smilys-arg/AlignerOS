@@ -18,7 +18,7 @@
   --text:#0f172a; --text2:#475569; --text3:#94a3b8;
   --accent:#2563eb; --accent2:#1d4ed8;
   --red:#dc2626; --yellow:#ca8a04; --green:#16a34a;
-  --sp:#2563eb; --st:#7c3aed; --sc:#ea580c; --spo:#0891b2;
+  --sp:#2563eb; --st:#7c3aed; --sc:#ea580c; --spo:#0891b2; --senv:#16a34a; --sfin:#64748b;
   --done:#64748b;
   --shadow-sm:0 1px 2px rgba(0,0,0,.05);
   --shadow:0 4px 6px rgba(0,0,0,.04),0 1px 3px rgba(0,0,0,.06);
@@ -43,7 +43,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:0 2
 
 main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-width:1280px;margin:0 auto}
 
-.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px}
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:18px}
 .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 12px;box-shadow:var(--shadow-sm);transition:box-shadow .15s}
 .stat-card:hover{box-shadow:var(--shadow)}
 .stat-label{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:4px;font-weight:500}
@@ -66,6 +66,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 .filter-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(37,99,235,.06)}
 
 .kanban-wrap{overflow-x:auto;scrollbar-width:none;margin:0 -18px;padding:0 18px 6px}
+/* 5 columnas */
 .kanban{display:grid;grid-template-columns:repeat(5,minmax(200px,1fr));gap:10px;min-width:1200px}
 .kanban-col{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow-sm)}
 .col-header{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface2)}
@@ -196,8 +197,8 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 .toast.show{transform:translateX(-50%) translateY(0);opacity:1}
 
 @media(min-width:768px){main{padding:24px;padding-bottom:24px}.stats-grid{grid-template-columns:repeat(7,1fr)}.case-days{display:block}}
-@media(min-width:1024px){.desktop-nav{display:flex}.bottom-nav{display:none!important}.fab{display:none!important}.btn-new{display:flex}.date-chip{display:block}.kanban{min-width:unset;grid-template-columns:repeat(4,1fr)}.kanban-wrap{overflow-x:visible;margin:0;padding:0}.modal{border-radius:12px;padding:24px}.modal-overlay{align-items:center}}
-@media(max-width:767px){.desktop-nav{display:none}.btn-new{display:none}.bottom-nav{display:flex}.fab{display:flex}.kanban{min-width:900px;grid-template-columns:repeat(4,225px)}.arcadas-grid{grid-template-columns:1fr}.section-header{flex-direction:column;align-items:flex-start}.form-grid{grid-template-columns:1fr}.form-group.full{grid-column:1}.btn-cancel{display:none}.btn-submit{max-width:none}.stock-grid{grid-template-columns:1fr 1fr}}
+@media(min-width:1024px){.desktop-nav{display:flex}.bottom-nav{display:none!important}.fab{display:none!important}.btn-new{display:flex}.date-chip{display:block}.kanban{min-width:unset;grid-template-columns:repeat(5,1fr)}.kanban-wrap{overflow-x:visible;margin:0;padding:0}.modal{border-radius:12px;padding:24px}.modal-overlay{align-items:center}}
+@media(max-width:767px){.desktop-nav{display:none}.btn-new{display:none}.bottom-nav{display:flex}.fab{display:flex}.kanban{min-width:1100px;grid-template-columns:repeat(5,200px)}.arcadas-grid{grid-template-columns:1fr}.section-header{flex-direction:column;align-items:flex-start}.form-grid{grid-template-columns:1fr}.form-group.full{grid-column:1}.btn-cancel{display:none}.btn-submit{max-width:none}.stock-grid{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
@@ -263,7 +264,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 </nav>
 <button class="fab" onclick="openNewCase()">+</button>
 
-<!-- Modales -->
+<!-- Modales (se mantienen igual) -->
 <div class="modal-overlay" id="newCaseModal">
   <div class="modal">
     <button class="modal-close" onclick="closeModal('newCaseModal')">&times;</button>
@@ -337,11 +338,12 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 })();
 
 // ===================================================================
-//  AlignerOS · Persistencia LOCAL garantizada (localStorage)
+//  AlignerOS · Datos reales + Envío
 // ===================================================================
-const STAGES = ['Impresión','Termoformado','Corte','Pulido','Envío'];
-const SKEYS = ['print','thermo','cut','polish','ship'];
-const SCOLS = {print:'#2563eb',thermo:'#7c3aed',cut:'#ea580c',polish:'#0891b2',ship:'#16a34a'};
+const STAGES = ['Impresión','Termoformado','Corte / Pulido','Envío'];
+const SKEYS = ['print','thermo','cutpolish','ship']; // cutpolish = corte+pulido juntos
+const SCOLS = {print:'#2563eb',thermo:'#7c3aed',cutpolish:'#ea580c',ship:'#16a34a'};
+const FINAL_STAGE = 4; // Finalizado = etapa 4 (no se muestra en kanban, solo en casos)
 const LS_KEY = 'aligner_data_v1';
 
 let repCtx = null, editingCaseId = null;
@@ -367,30 +369,579 @@ function formatRanges(indices){
   return parts.join(',');
 }
 
-function defaultState(){
-  const cases=[];
-  const c1=makeCase('García Martínez, Lucía','Dr. Pérez','DRPEREZ',22,15,daysFromNow(2),'Mordida cruzada');
-  const sup1=c1.arcadas.sup;
-  for(let i=0;i<22;i++){
-    if(i<=2)sup1.alinStates[i]=0; else if(i<=7)sup1.alinStates[i]=1;
-    else if(i<=16){if(i===10)sup1.alinStates[i]=3; else sup1.alinStates[i]=2;}
-    else sup1.alinStates[i]=-1;
-  }
-  const inf1=c1.arcadas.inf;
-  for(let i=0;i<15;i++){if(i<5)inf1.alinStates[i]=0; else if(i<10)inf1.alinStates[i]=1; else inf1.alinStates[i]=-1;}
-  cases.push(c1);
-  cases.push(makeCase('Rodríguez, Carlos','Dra. López','DRALOPEZ',18,18,daysFromNow(7),''));
-  cases.push(makeCase('Fernández, Ana','Dr. Gómez','DRGOMEZ',30,0,daysFromNow(14),'Solo superior'));
-  cases.push(makeCase('Jiménez, Pedro','Dra. Ruiz','DRARUIZ',12,12,daysFromNow(1),'URGENTE'));
-  cases.push(makeCase('Torres, María','Dr. Pérez','DRPEREZ',20,16,daysFromNow(5),''));
-  return { cases, stock:[
-    {id:uid(),name:'Planchas 0.75mm',type:'Planchas',qty:45,min:30,unit:'láminas',max:200},
-    {id:uid(),name:'Planchas 1.0mm',type:'Planchas',qty:12,min:20,unit:'láminas',max:100},
-    {id:uid(),name:'Resina UV',type:'Resina',qty:3,min:2,unit:'kg',max:10},
-    {id:uid(),name:'Bolsas',type:'Packaging',qty:180,min:50,unit:'unid',max:500},
-  ]};
+function isCaseCompletelyFinished(c) {
+  return ['sup','inf'].every(at => {
+    const arc = c.arcadas[at];
+    if (!arc) return true;
+    return arc.alinStates.every(st => st === FINAL_STAGE || st === -1);
+  });
 }
 
+// ==================== IMPORTACIÓN DESDE CSV (tus datos) ====================
+const csvRaw = `ID Paciente,Nombre Paciente,Alineador,Arcada (S/I),# (Step),PRODUCCION
+GE01,Martina Cutrera,GE01S0,S,0,ENTREGADO
+GE01,Martina Cutrera,GE01S1,S,1,ENTREGADO
+GE01,Martina Cutrera,GE01S2,S,2,ENTREGADO
+GE01,Martina Cutrera,GE01S3,S,3,ENTREGADO
+GE01,Martina Cutrera,GE01S4,S,4,ENTREGADO
+GE01,Martina Cutrera,GE01S5,S,5,ENTREGADO
+GE01,Martina Cutrera,GE01S6,S,6,ENTREGADO
+GE01,Martina Cutrera,GE01S7,S,7,ENTREGADO
+GE01,Martina Cutrera,GE01S8,S,8,ENTREGADO
+GE01,Martina Cutrera,GE01S9,S,9,ENTREGADO
+GE01,Martina Cutrera,GE01S10,S,10,ENTREGADO
+GE01,Martina Cutrera,GE01S11,S,11,ENTREGADO
+GE01,Martina Cutrera,GE01S12,S,12,ENTREGADO
+GE01,Martina Cutrera,GE01S13,S,13,ENTREGADO
+GE01,Martina Cutrera,GE01S14,S,14,ENTREGADO
+GM02,Micaela Grimaldi,GM02S0,S,0,ENTREGADO
+GM02,Micaela Grimaldi,GM02S1,S,1,ENTREGADO
+GM02,Micaela Grimaldi,GM02S2,S,2,ENTREGADO
+GM02,Micaela Grimaldi,GM02S3,S,3,ENTREGADO
+GM02,Micaela Grimaldi,GM02S4,S,4,ENTREGADO
+GM02,Micaela Grimaldi,GM02S5,S,5,ENTREGADO
+GM02,Micaela Grimaldi,GM02S6,S,6,ENTREGADO
+GM02,Micaela Grimaldi,GM02S7,S,7,ENTREGADO
+GM02,Micaela Grimaldi,GM02S8,S,8,ENTREGADO
+GM02,Micaela Grimaldi,GM02S9,S,9,ENTREGADO
+GM02,Micaela Grimaldi,GM02S10,S,10,ENTREGADO
+GM02,Micaela Grimaldi,GM02S11,S,11,ENTREGADO
+GM02,Micaela Grimaldi,GM02S12,S,12,LISTO
+GM02,Micaela Grimaldi,GM02S13,S,13,TERMOFORMAR
+GM02,Micaela Grimaldi,GM02S14,S,14,TERMOFORMAR
+GM02,Micaela Grimaldi,GM02I0,I,0,ENTREGADO
+GM02,Micaela Grimaldi,GM02I1,I,1,ENTREGADO
+GM02,Micaela Grimaldi,GM02I2,I,2,ENTREGADO
+GM02,Micaela Grimaldi,GM02I3,I,3,ENTREGADO
+GM02,Micaela Grimaldi,GM02I4,I,4,ENTREGADO
+GM02,Micaela Grimaldi,GM02I5,I,5,ENTREGADO
+GM02,Micaela Grimaldi,GM02I6,I,6,ENTREGADO
+GM02,Micaela Grimaldi,GM02I7,I,7,ENTREGADO
+GM02,Micaela Grimaldi,GM02I8,I,8,ENTREGADO
+GM02,Micaela Grimaldi,GM02I9,I,9,ENTREGADO
+GM02,Micaela Grimaldi,GM02I10,I,10,ENTREGADO
+GM02,Micaela Grimaldi,GM02I11,I,11,ENTREGADO
+GM02,Micaela Grimaldi,GM02I12,I,12,LISTO
+GM02,Micaela Grimaldi,GM02I13,I,13,TERMOFORMAR
+GM02,Micaela Grimaldi,GM02I14,I,14,TERMOFORMAR
+GM03,Lorena Miño,GM03S0,S,0,ENTREGADO
+GM03,Lorena Miño,GM03S1,S,1,ENTREGADO
+GM03,Lorena Miño,GM03S2,S,2,ENTREGADO
+GM03,Lorena Miño,GM03S3,S,3,ENTREGADO
+GM03,Lorena Miño,GM03S4,S,4,ENTREGADO
+GM03,Lorena Miño,GM03S5,S,5,ENTREGADO
+GM03,Lorena Miño,GM03S6,S,6,ENTREGADO
+GM03,Lorena Miño,GM03S7,S,7,ENTREGADO
+GM03,Lorena Miño,GM03S8,S,8,LISTO
+GM03,Lorena Miño,GM03S9,S,9,LISTO
+GM03,Lorena Miño,GM03S10,S,10,TERMOFORMAR
+GM03,Lorena Miño,GM03S11,S,11,TERMOFORMAR
+GM03,Lorena Miño,GM03S12,S,12,TERMOFORMAR
+GM03,Lorena Miño,GM03S13,S,13,TERMOFORMAR
+GM03,Lorena Miño,GM03S14,S,14,TERMOFORMAR
+GM03,Lorena Miño,GM03S15,S,15,TERMOFORMAR
+GM03,Lorena Miño,GM03S16,S,16,TERMOFORMAR
+GM03,Lorena Miño,GM03S17,S,17,TERMOFORMAR
+GM03,Lorena Miño,GM03I0,I,0,ENTREGADO
+GM03,Lorena Miño,GM03I1,I,1,ENTREGADO
+GM03,Lorena Miño,GM03I2,I,2,ENTREGADO
+GM03,Lorena Miño,GM03I3,I,3,ENTREGADO
+GM03,Lorena Miño,GM03I4,I,4,ENTREGADO
+GM03,Lorena Miño,GM03I5,I,5,ENTREGADO
+GM03,Lorena Miño,GM03I6,I,6,ENTREGADO
+GM03,Lorena Miño,GM03I7,I,7,ENTREGADO
+GM03,Lorena Miño,GM03I8,I,8,LISTO
+GM03,Lorena Miño,GM03I9,I,9,LISTO
+GM03,Lorena Miño,GM03I10,I,10,TERMOFORMAR
+GM03,Lorena Miño,GM03I11,I,11,TERMOFORMAR
+GM03,Lorena Miño,GM03I12,I,12,TERMOFORMAR
+GM03,Lorena Miño,GM03I13,I,13,TERMOFORMAR
+GM03,Lorena Miño,GM03I14,I,14,TERMOFORMAR
+GM03,Lorena Miño,GM03I15,I,15,TERMOFORMAR
+GM03,Lorena Miño,GM03I16,I,16,TERMOFORMAR
+GM03,Lorena Miño,GM03I17,I,17,TERMOFORMAR
+GM03,Lorena Miño,GM03I18,I,18,TERMOFORMAR
+GM03,Lorena Miño,GM03I19,I,19,TERMOFORMAR
+GM04,Ailen,GM04S0,S,0,ENTREGADO
+GM04,Ailen,GM04S1,S,1,ENTREGADO
+GM04,Ailen,GM04S2,S,2,ENTREGADO
+GM04,Ailen,GM04S3,S,3,ENTREGADO
+GM04,Ailen,GM04S4,S,4,ENTREGADO
+GM04,Ailen,GM04S5,S,5,ENTREGADO
+GM04,Ailen,GM04S6,S,6,ENTREGADO
+GM04,Ailen,GM04S7,S,7,ENTREGADO
+GM04,Ailen,GM04S8,S,8,ENTREGADO
+GM04,Ailen,GM04S9,S,9,ENTREGADO
+GM04,Ailen,GM04S10,S,10,ENTREGADO
+GM04,Ailen,GM04I0,I,0,ENTREGADO
+GM04,Ailen,GM04I1,I,1,ENTREGADO
+GM04,Ailen,GM04I2,I,2,ENTREGADO
+GM04,Ailen,GM04I3,I,3,ENTREGADO
+GM04,Ailen,GM04I4,I,4,ENTREGADO
+GM04,Ailen,GM04I5,I,5,ENTREGADO
+GM04,Ailen,GM04I6,I,6,ENTREGADO
+GM04,Ailen,GM04I7,I,7,ENTREGADO
+GM04,Ailen,GM04I8,I,8,ENTREGADO
+GM04,Ailen,GM04I9,I,9,ENTREGADO
+GM04,Ailen,GM04I10,I,10,ENTREGADO
+GM04,Ailen,GM04I11,I,11,ENTREGADO
+GM05,Jorge Thefs,GM05S0,S,0,ENTREGADO
+GM05,Jorge Thefs,GM05S1,S,1,ENTREGADO
+GM05,Jorge Thefs,GM05S2,S,2,ENTREGADO
+GM05,Jorge Thefs,GM05S3,S,3,ENTREGADO
+GM05,Jorge Thefs,GM05S4,S,4,ENTREGADO
+GM05,Jorge Thefs,GM05S5,S,5,ENTREGADO
+GM05,Jorge Thefs,GM05S6,S,6,ENTREGADO
+GM05,Jorge Thefs,GM05I0,I,0,ENTREGADO
+GM05,Jorge Thefs,GM05I1,I,1,ENTREGADO
+GM05,Jorge Thefs,GM05I2,I,2,ENTREGADO
+GM05,Jorge Thefs,GM05I3,I,3,ENTREGADO
+GM05,Jorge Thefs,GM05I4,I,4,ENTREGADO
+GM05,Jorge Thefs,GM05I5,I,5,ENTREGADO
+GM05,Jorge Thefs,GM05I6,I,6,ENTREGADO
+GM06,Juan Manuel,GM06S0,S,0,ENTREGADO
+GM06,Juan Manuel,GM06S1,S,1,ENTREGADO
+GM06,Juan Manuel,GM06S2,S,2,ENTREGADO
+GM06,Juan Manuel,GM06S3,S,3,ENTREGADO
+GM06,Juan Manuel,GM06S4,S,4,ENTREGADO
+GM06,Juan Manuel,GM06S5,S,5,ENTREGADO
+GM06,Juan Manuel,GM06S6,S,6,ENTREGADO
+GM06,Juan Manuel,GM06S7,S,7,ENTREGADO
+GM06,Juan Manuel,GM06S8,S,8,ENTREGADO
+GM06,Juan Manuel,GM06S9,S,9,ENTREGADO
+GM06,Juan Manuel,GM06S10,S,10,LISTO
+GM06,Juan Manuel,GM06S11,S,11,LISTO
+GM06,Juan Manuel,GM06S12,S,12,TERMOFORMAR
+GM06,Juan Manuel,GM06S13,S,13,TERMOFORMAR
+GM06,Juan Manuel,GM06S14,S,14,TERMOFORMAR
+GM06,Juan Manuel,GM06S15,S,15,TERMOFORMAR
+GM06,Juan Manuel,GM06I0,I,0,ENTREGADO
+GM06,Juan Manuel,GM06I1,I,1,ENTREGADO
+GM06,Juan Manuel,GM06I2,I,2,ENTREGADO
+GM06,Juan Manuel,GM06I3,I,3,ENTREGADO
+GM06,Juan Manuel,GM06I4,I,4,ENTREGADO
+GM06,Juan Manuel,GM06I5,I,5,ENTREGADO
+GM06,Juan Manuel,GM06I6,I,6,ENTREGADO
+GM06,Juan Manuel,GM06I7,I,7,ENTREGADO
+GM06,Juan Manuel,GM06I8,I,8,LISTO
+GM06,Juan Manuel,GM06I9,I,9,LISTO
+GM06,Juan Manuel,GM06I10,I,10,TERMOFORMAR
+GM07,Sil Rivas,GM07I0,I,0,ENTREGADO
+GM07,Sil Rivas,GM07I1,I,1,ENTREGADO
+GM07,Sil Rivas,GM07I2,I,2,ENTREGADO
+GM07,Sil Rivas,GM07I3,I,3,ENTREGADO
+GM07,Sil Rivas,GM07I4,I,4,ENTREGADO
+,Nidia,S0,S,0,ENTREGADO
+,Nidia,S1,S,1,ENTREGADO
+,Nidia,S2,S,2,ENTREGADO
+,Nidia,S3,S,3,ENTREGADO
+,Nidia,I0,I,0,ENTREGADO
+,Nidia,I1,I,1,ENTREGADO
+,Nidia,I2,I,2,ENTREGADO
+,Nidia,I3,I,3,ENTREGADO
+,Nidia,I4,I,4,ENTREGADO
+,Nidia,I5,I,5,ENTREGADO
+,Nidia,I6,I,6,ENTREGADO
+,Nidia,I7,I,7,ENTREGADO
+GM08,Valentin Neme,GM08I0,I,0,ENTREGADO
+GM08,Valentin Neme,GM08I1,I,1,ENTREGADO
+GM08,Valentin Neme,GM08I2,I,2,ENTREGADO
+GM08,Valentin Neme,GM08I3,I,3,ENTREGADO
+GM08,Valentin Neme,GM08I4,I,4,ENTREGADO
+GM08,Valentin Neme,GM08I5,I,5,ENTREGADO
+GM01,Leston,GM01S0,S,0,ENTREGADO
+GM01,Leston,GM01S1,S,1,ENTREGADO
+GM01,Leston,GM01S2,S,2,ENTREGADO
+GM01,Leston,GM01S3,S,3,ENTREGADO
+GM01,Leston,GM01S4,S,4,ENTREGADO
+GM01,Leston,GM01S5,S,5,ENTREGADO
+GM01,Leston,GM01S6,S,6,ENTREGADO
+GM09,Agustina Matias,GM09S0,S,0,ENTREGADO
+GM09,Agustina Matias,GM09S1,S,1,ENTREGADO
+GM09,Agustina Matias,GM09S2,S,2,ENTREGADO
+GM09,Agustina Matias,GM09S3,S,3,ENTREGADO
+GM09,Agustina Matias,GM09S4,S,4,ENTREGADO
+GM09,Agustina Matias,GM09S5,S,5,ENTREGADO
+GM09,Agustina Matias,GM09S6,S,6,ENTREGADO
+GM09,Agustina Matias,GM09S7,S,7,ENTREGADO
+GM09,Agustina Matias,GM09S8,S,8,ENTREGADO
+GM09,Agustina Matias,GM09S9,S,9,ENTREGADO
+GM09,Agustina Matias,GM09S10,S,10,ENTREGADO
+GM09,Agustina Matias,GM09S11,S,11,ENTREGADO
+GM09,Agustina Matias,GM09I0,I,0,ENTREGADO
+GM09,Agustina Matias,GM09I1,I,1,ENTREGADO
+GM09,Agustina Matias,GM09I2,I,2,ENTREGADO
+GM09,Agustina Matias,GM09I3,I,3,ENTREGADO
+GM09,Agustina Matias,GM09I4,I,4,ENTREGADO
+GM09,Agustina Matias,GM09I5,I,5,ENTREGADO
+GM09,Agustina Matias,GM09I6,I,6,ENTREGADO
+GM09,Agustina Matias,GM09I7,I,7,ENTREGADO
+GM09,Agustina Matias,GM09I8,I,8,ENTREGADO
+GM09,Agustina Matias,GM09I9,I,9,ENTREGADO
+GM09,Agustina Matias,GM09I10,I,10,ENTREGADO
+GM09,Agustina Matias,GM09I11,I,11,ENTREGADO
+GM09,Agustina Matias,GM09I12,I,12,ENTREGADO
+GM09,Agustina Matias,GM09I13,I,13,ENTREGADO
+GM09,Agustina Matias,GM09I14,I,14,ENTREGADO
+GM09,Agustina Matias,GM09I15,I,15,ENTREGADO
+GM09,Agustina Matias,GM09I16,I,16,ENTREGADO
+GM09,Agustina Matias,GM09I17,I,17,ENTREGADO
+GM10,Chocobar,GM10S0,S,0,ENTREGADO
+GM10,Chocobar,GM10S1,S,1,ENTREGADO
+GM10,Chocobar,GM10S2,S,2,ENTREGADO
+GM10,Chocobar,GM10S3,S,3,ENTREGADO
+GM10,Chocobar,GM10S4,S,4,ENTREGADO
+GM10,Chocobar,GM10S5,S,5,LISTO
+GM10,Chocobar,GM10S6,S,6,LISTO
+GM10,Chocobar,GM10S7,S,7,TERMOFORMAR
+GM10,Chocobar,GM10S8,S,8,IMPRIMIR
+GM10,Chocobar,GM10S9,S,9,IMPRIMIR
+GM10,Chocobar,GM10S10,S,10,IMPRIMIR
+GM10,Chocobar,GM10S11,S,11,IMPRIMIR
+GM10,Chocobar,GM10I0,I,0,ENTREGADO
+GM10,Chocobar,GM10I1,I,1,ENTREGADO
+GM10,Chocobar,GM10I2,I,2,ENTREGADO
+GM10,Chocobar,GM10I3,I,3,ENTREGADO
+GM10,Chocobar,GM10I4,I,4,ENTREGADO
+GM10,Chocobar,GM10I5,I,5,LISTO
+GM10,Chocobar,GM10I6,I,6,LISTO
+GM10,Chocobar,GM10I7,I,7,TERMOFORMAR
+GM10,Chocobar,GM10I8,I,8,IMPRIMIR
+GM10,Chocobar,GM10I9,I,9,IMPRIMIR
+GM10,Chocobar,GM10I10,I,10,IMPRIMIR
+GM10,Chocobar,GM10I11,I,11,IMPRIMIR
+GM10,Chocobar,GM10I12,I,12,IMPRIMIR
+MS01,Alma Luna,MS01I0,I,0,ENTREGADO
+MS01,Alma Luna,MS01I1,I,1,ENTREGADO
+MS01,Alma Luna,MS01I2,I,2,ENTREGADO
+MS01,Alma Luna,MS01I3,I,3,ENTREGADO
+MS01,Alma Luna,MS01I4,I,4,ENTREGADO
+MS01,Alma Luna,MS01I5,I,5,ENTREGADO
+MS01,Alma Luna,MS01I6,I,6,LISTO
+MS01,Alma Luna,MS01I7,I,7,TERMOFORMAR
+MS01,Alma Luna,MS01I8,I,8,IMPRIMIR
+MS01,Alma Luna,MS01I9,I,9,IMPRIMIR
+MS01,Alma Luna,MS01I10,I,10,IMPRIMIR
+MS01,Alma Luna,MS01I11,I,11,IMPRIMIR
+MS01,Alma Luna,MS01I12,I,12,IMPRIMIR
+MS01,Alma Luna,MS01I13,I,13,IMPRIMIR
+MS01,Alma Luna,MS01I14,I,14,IMPRIMIR
+MS01,Alma Luna,MS01I15,I,15,IMPRIMIR
+MS01,Alma Luna,MS01I16,I,16,IMPRIMIR
+MS01,Alma Luna,MS01I17,I,17,IMPRIMIR
+MS01,Alma Luna,MS01I18,I,18,IMPRIMIR
+MS01,Alma Luna,MS01I19,I,19,IMPRIMIR
+MS01,Alma Luna,MS01S0,S,0,ENTREGADO
+MS01,Alma Luna,MS01S1,S,1,ENTREGADO
+MS01,Alma Luna,MS01S2,S,2,ENTREGADO
+MS01,Alma Luna,MS01S3,S,3,ENTREGADO
+MS01,Alma Luna,MS01S4,S,4,ENTREGADO
+MS01,Alma Luna,MS01S5,S,5,ENTREGADO
+MS01,Alma Luna,MS01S6,S,6,LISTO
+MS01,Alma Luna,MS01S7,S,7,TERMOFORMAR
+MS01,Alma Luna,MS01S8,S,8,IMPRIMIR
+MS01,Alma Luna,MS01S9,S,9,IMPRIMIR
+MS01,Alma Luna,MS01S10,S,10,IMPRIMIR
+MS01,Alma Luna,MS01S11,S,11,IMPRIMIR
+MS01,Alma Luna,MS01S12,S,12,IMPRIMIR
+MS01,Alma Luna,MS01S13,S,13,IMPRIMIR
+MS01,Alma Luna,MS01S14,S,14,IMPRIMIR
+MS01,Alma Luna,MS01S15,S,15,IMPRIMIR
+MS01,Alma Luna,MS01S16,S,16,IMPRIMIR
+MS01,Alma Luna,MS01S17,S,17,IMPRIMIR
+MS01,Alma Luna,MS01S18,S,18,IMPRIMIR
+MS01,Alma Luna,MS01S19,S,19,IMPRIMIR
+MS01,Alma Luna,MS01S20,S,20,IMPRIMIR
+MS01,Alma Luna,MS01S21,S,21,IMPRIMIR
+MS01,Alma Luna,MS01S22,S,22,IMPRIMIR
+GM11,Bendahan Sarah,GM11I0,I,0,IMPRIMIR
+GM11,Bendahan Sarah,GM11I1,I,1,IMPRIMIR
+GM11,Bendahan Sarah,GM11I2,I,2,IMPRIMIR
+GM11,Bendahan Sarah,GM11I3,I,3,IMPRIMIR
+GM11,Bendahan Sarah,GM11I4,I,4,IMPRIMIR
+GM11,Bendahan Sarah,GM11I5,I,5,IMPRIMIR
+GM11,Bendahan Sarah,GM11I6,I,6,IMPRIMIR
+GM11,Bendahan Sarah,GM11I7,I,7,IMPRIMIR
+GM11,Bendahan Sarah,GM11I8,I,8,IMPRIMIR
+GM11,Bendahan Sarah,GM11I9,I,9,IMPRIMIR
+GM11,Bendahan Sarah,GM11S0,S,0,IMPRIMIR
+GM11,Bendahan Sarah,GM11S1,S,1,IMPRIMIR
+GM11,Bendahan Sarah,GM11S2,S,2,IMPRIMIR
+GM11,Bendahan Sarah,GM11S3,S,3,IMPRIMIR
+GM11,Bendahan Sarah,GM11S4,S,4,IMPRIMIR
+GM11,Bendahan Sarah,GM11S5,S,5,IMPRIMIR
+GM11,Bendahan Sarah,GM11S6,S,6,IMPRIMIR
+GM11,Bendahan Sarah,GM11S7,S,7,IMPRIMIR
+GM11,Bendahan Sarah,GM11S8,S,8,IMPRIMIR
+GM11,Bendahan Sarah,GM11S9,S,9,IMPRIMIR
+GM12,Ezequiel Sauchelli,GM12I0,I,0,ENTREGADO
+GM12,Ezequiel Sauchelli,GM12I1,I,1,ENTREGADO
+GM12,Ezequiel Sauchelli,GM12I2,I,2,ENTREGADO
+GM12,Ezequiel Sauchelli,GM12I3,I,3,ENTREGADO
+GM12,Ezequiel Sauchelli,GM12I4,I,4,ENTREGADO
+GM12,Ezequiel Sauchelli,GM12I5,I,5,LISTO
+GM12,Ezequiel Sauchelli,GM12I6,I,6,LISTO
+GM12,Ezequiel Sauchelli,GM12I7,I,7,IMPRIMIR
+GM12,Ezequiel Sauchelli,GM12I8,I,8,IMPRIMIR
+GM12,Ezequiel Sauchelli,GM12I9,I,9,IMPRIMIR
+GM12,Ezequiel Sauchelli,GM12I10,I,10,IMPRIMIR
+GM12,Ezequiel Sauchelli,GM12I11,I,11,IMPRIMIR
+GM12,Ezequiel Sauchelli,GM12I12,I,12,IMPRIMIR
+GM12,Ezequiel Sauchelli,GM12I13,I,13,IMPRIMIR
+GM12,Ezequiel Sauchelli,GM12S0,S,0,ENTREGADO
+GM12,Ezequiel Sauchelli,GM12S1,S,1,ENTREGADO
+GM12,Ezequiel Sauchelli,GM12S2,S,2,ENTREGADO
+GM12,Ezequiel Sauchelli,GM12S3,S,3,ENTREGADO
+GM12,Ezequiel Sauchelli,GM12S4,S,4,ENTREGADO
+GM12,Ezequiel Sauchelli,GM12S5,S,5,LISTO
+GM12,Ezequiel Sauchelli,GM12S6,S,6,LISTO
+GM12,Ezequiel Sauchelli,GM12S7,S,7,TERMOFORMAR
+GM12,Ezequiel Sauchelli,GM12S8,S,8,TERMOFORMAR
+TM01,Rosario,TM01I0,I,0,ENTREGADO
+TM01,Rosario,TM01I1,I,1,LISTO
+TM01,Rosario,TM01I2,I,2,LISTO
+TM01,Rosario,TM01I3,I,3,IMPRIMIR
+TM01,Rosario,TM01I4,I,4,IMPRIMIR
+TM01,Rosario,TM01I5,I,5,IMPRIMIR
+TM01,Rosario,TM01I6,I,6,IMPRIMIR
+TM01,Rosario,TM01I7,I,7,IMPRIMIR
+TM01,Rosario,TM01I8,I,8,IMPRIMIR
+TM01,Rosario,TM01S0,S,0,ENTREGADO
+TM01,Rosario,TM01S1,S,1,LISTO
+TM01,Rosario,TM01S2,S,2,LISTO
+TM01,Rosario,TM01S3,S,3,IMPRIMIR
+TM01,Rosario,TM01S4,S,4,IMPRIMIR
+TM01,Rosario,TM01S5,S,5,IMPRIMIR
+TM01,Rosario,TM01S6,S,6,IMPRIMIR
+TM01,Rosario,TM01S7,S,7,IMPRIMIR
+TM02,Tomás,TM02I0,I,0,ENTREGADO
+TM02,Tomás,TM02I1,I,1,ENTREGADO
+TM02,Tomás,TM02I2,I,2,ENTREGADO
+TM02,Tomás,TM02I3,I,3,ENTREGADO
+TM02,Tomás,TM02I4,I,4,ENTREGADO
+TM02,Tomás,TM02I5,I,5,LISTO
+TM02,Tomás,TM02I6,I,6,LISTO
+TM02,Tomás,TM02I7,I,7,IMPRIMIR
+TM02,Tomás,TM02I8,I,8,IMPRIMIR
+TM02,Tomás,TM02I9,I,9,IMPRIMIR
+TM02,Tomás,TM02I10,I,10,IMPRIMIR
+TM02,Tomás,TM02I11,I,11,IMPRIMIR
+TM02,Tomás,TM02I12,I,12,IMPRIMIR
+TM02,Tomás,TM02I13,I,13,IMPRIMIR
+TM02,Tomás,TM02I14,I,14,IMPRIMIR
+TM02,Tomás,TM02I15,I,15,IMPRIMIR
+TM02,Tomás,TM02I16,I,16,IMPRIMIR
+TM02,Tomás,TM02I17,I,17,IMPRIMIR
+TM02,Tomás,TM02I18,I,18,IMPRIMIR
+TM02,Tomás,TM02I19,I,19,IMPRIMIR
+TM02,Tomás,TM02I20,I,20,IMPRIMIR
+TM02,Tomás,TM02I21,I,21,IMPRIMIR
+TM02,Tomás,TM02I22,I,22,IMPRIMIR
+TM02,Tomás,TM02I23,I,23,IMPRIMIR
+TM02,Tomás,TM02I24,I,24,IMPRIMIR
+TM02,Tomás,TM02I25,I,25,IMPRIMIR
+TM02,Tomás,TM02I26,I,26,IMPRIMIR
+TM02,Tomás,TM02I27,I,27,IMPRIMIR
+TM02,Tomás,TM02I28,I,28,IMPRIMIR
+TM02,Tomás,TM02S0,S,0,ENTREGADO
+TM02,Tomás,TM02S1,S,1,ENTREGADO
+TM02,Tomás,TM02S2,S,2,ENTREGADO
+TM02,Tomás,TM02S3,S,3,ENTREGADO
+TM02,Tomás,TM02S4,S,4,ENTREGADO
+TM02,Tomás,TM02S5,S,5,LISTO
+TM02,Tomás,TM02S6,S,6,LISTO
+TM02,Tomás,TM02S7,S,7,IMPRIMIR
+TM02,Tomás,TM02S8,S,8,IMPRIMIR
+TM02,Tomás,TM02S9,S,9,IMPRIMIR
+TM02,Tomás,TM02S10,S,10,IMPRIMIR
+TM02,Tomás,TM02S11,S,11,IMPRIMIR
+TM02,Tomás,TM02S12,S,12,IMPRIMIR
+TM02,Tomás,TM02S13,S,13,IMPRIMIR
+TM02,Tomás,TM02S14,S,14,IMPRIMIR
+TM02,Tomás,TM02S15,S,15,IMPRIMIR
+TM02,Tomás,TM02S16,S,16,IMPRIMIR
+TM02,Tomás,TM02S17,S,17,IMPRIMIR
+TM02,Tomás,TM02S18,S,18,IMPRIMIR
+TM02,Tomás,TM02S19,S,19,IMPRIMIR
+TM02,Tomás,TM02S20,S,20,IMPRIMIR
+TM02,Tomás,TM02S21,S,21,IMPRIMIR
+TM02,Tomás,TM02S22,S,22,IMPRIMIR
+TM02,Tomás,TM02S23,S,23,IMPRIMIR
+TM02,Tomás,TM02S24,S,24,IMPRIMIR
+TM02,Tomás,TM02S25,S,25,IMPRIMIR
+TM02,Tomás,TM02S26,S,26,IMPRIMIR
+TM02,Tomás,TM02S27,S,27,IMPRIMIR
+TM02,Tomás,TM02S28,S,28,IMPRIMIR
+TM02,Tomás,TM02S29,S,29,IMPRIMIR
+TM02,Tomás,TM02S30,S,30,IMPRIMIR
+TM02,Tomás,TM02S31,S,31,IMPRIMIR
+GM13,Luna Martina,GM13I0,I,0,LISTO
+GM13,Luna Martina,GM13I1,I,1,LISTO
+GM13,Luna Martina,GM13I2,I,2,TERMOFORMAR
+GM13,Luna Martina,GM13I3,I,3,TERMOFORMAR
+GM13,Luna Martina,GM13I4,I,4,TERMOFORMAR
+GM13,Luna Martina,GM13I5,I,5,IMPRIMIR
+GM13,Luna Martina,GM13I6,I,6,IMPRIMIR
+GM13,Luna Martina,GM13I7,I,7,IMPRIMIR
+GM13,Luna Martina,GM13I8,I,8,IMPRIMIR
+GM13,Luna Martina,GM13I9,I,9,IMPRIMIR
+GM13,Luna Martina,GM13I10,I,10,IMPRIMIR
+GM13,Luna Martina,GM13I11,I,11,IMPRIMIR
+GM13,Luna Martina,GM13I12,I,12,IMPRIMIR
+GM13,Luna Martina,GM13I13,I,13,IMPRIMIR
+GM13,Luna Martina,GM13I14,I,14,IMPRIMIR
+GM13,Luna Martina,GM13I15,I,15,IMPRIMIR
+GM13,Luna Martina,GM13I16,I,16,IMPRIMIR
+GM13,Luna Martina,GM13I17,I,17,IMPRIMIR
+GM13,Luna Martina,GM13I18,I,18,IMPRIMIR
+GM13,Luna Martina,GM13I19,I,19,IMPRIMIR
+GM13,Luna Martina,GM13S0,S,0,LISTO
+GM13,Luna Martina,GM13S1,S,1,LISTO
+GM13,Luna Martina,GM13S2,S,2,TERMOFORMAR
+GM13,Luna Martina,GM13S3,S,3,TERMOFORMAR
+GM13,Luna Martina,GM13S4,S,4,TERMOFORMAR
+GM13,Luna Martina,GM13S5,S,5,IMPRIMIR
+GM13,Luna Martina,GM13S6,S,6,IMPRIMIR
+GM13,Luna Martina,GM13S7,S,7,IMPRIMIR
+GM13,Luna Martina,GM13S8,S,8,IMPRIMIR
+GM13,Luna Martina,GM13S9,S,9,IMPRIMIR
+GM13,Luna Martina,GM13S10,S,10,IMPRIMIR
+GM13,Luna Martina,GM13S11,S,11,IMPRIMIR
+GM13,Luna Martina,GM13S12,S,12,IMPRIMIR
+GM13,Luna Martina,GM13S13,S,13,IMPRIMIR
+GM13,Luna Martina,GM13S14,S,14,IMPRIMIR
+GM13,Luna Martina,GM13S15,S,15,IMPRIMIR
+GM13,Luna Martina,GM13S16,S,16,IMPRIMIR
+GM13,Luna Martina,GM13S17,S,17,IMPRIMIR
+GM14,Gonzalez Lorena,GM14S0,S,0,ENTREGADO
+GM14,Gonzalez Lorena,GM14S1,S,1,LISTO
+GM14,Gonzalez Lorena,GM14S2,S,2,TERMOFORMAR
+GM14,Gonzalez Lorena,GM14S3,S,3,TERMOFORMAR
+GM14,Gonzalez Lorena,GM14S4,S,4,IMPRIMIR
+GM14,Gonzalez Lorena,GM14S5,S,5,IMPRIMIR
+GM14,Gonzalez Lorena,GM14S6,S,6,IMPRIMIR
+GM14,Gonzalez Lorena,GM14S7,S,7,IMPRIMIR
+GM14,Gonzalez Lorena,GM14S8,S,8,IMPRIMIR
+GM14,Gonzalez Lorena,GM14S9,S,9,IMPRIMIR
+GM14,Gonzalez Lorena,GM14S10,S,10,IMPRIMIR
+TM00,Lucia,TM00I0,I,0,LISTO
+TM00,Lucia,TM00I1,I,1,LISTO
+TM00,Lucia,TM00I2,I,2,IMPRIMIR
+TM00,Lucia,TM00I3,I,3,IMPRIMIR
+TM00,Lucia,TM00I4,I,4,IMPRIMIR
+TM00,Lucia,TM00I5,I,5,IMPRIMIR
+TM00,Lucia,TM00I6,I,6,IMPRIMIR
+TM00,Lucia,TM00I7,I,7,IMPRIMIR
+TM00,Lucia,TM00I8,I,8,IMPRIMIR
+TM00,Lucia,TM00I9,I,9,IMPRIMIR
+TM00,Lucia,TM00I10,I,10,IMPRIMIR
+TM00,Lucia,TM00I11,I,11,IMPRIMIR
+TM00,Lucia,TM00I12,I,12,IMPRIMIR
+TM00,Lucia,TM00I13,I,13,IMPRIMIR
+TM00,Lucia,TM00I14,I,14,IMPRIMIR
+TM00,Lucia,TM00I15,I,15,IMPRIMIR
+TM00,Lucia,TM00I16,I,16,IMPRIMIR
+TM00,Lucia,TM00S0,S,0,LISTO
+TM00,Lucia,TM00S1,S,1,LISTO
+TM00,Lucia,TM00S2,S,2,IMPRIMIR
+TM00,Lucia,TM00S3,S,3,IMPRIMIR
+TM00,Lucia,TM00S4,S,4,IMPRIMIR
+TM00,Lucia,TM00S5,S,5,IMPRIMIR
+TM00,Lucia,TM00S6,S,6,IMPRIMIR
+TM00,Lucia,TM00S7,S,7,IMPRIMIR
+TM00,Lucia,TM00S8,S,8,IMPRIMIR
+GM00,Nadia,GM00I0,I,0,ENTREGADO
+GM00,Nadia,GM00I1,I,1,ENTREGADO
+GM00,Nadia,GM00I2,I,2,ENTREGADO
+GM00,Nadia,GM00I3,I,3,ENTREGADO
+GM00,Nadia,GM00I4,I,4,ENTREGADO
+GM00,Nadia,GM00I5,I,5,LISTO
+GM00,Nadia,GM00I6,I,6,IMPRIMIR
+GM00,Nadia,GM00I7,I,7,TERMOFORMAR
+GM00,Nadia,GM00I8,I,8,TERMOFORMAR
+GM00,Nadia,GM00I9,I,9,TERMOFORMAR`;
+
+function parseCSV(csvText) {
+  const lines = csvText.split('\n').filter(line => line.trim());
+  const headers = lines[0].split(',');
+  const data = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',');
+    if (cols.length < 6) continue;
+    const row = {
+      idPaciente: cols[0].trim(),
+      nombre: cols[1].trim(),
+      alineador: cols[2].trim(),
+      arcada: cols[3].trim().toUpperCase() === 'S' ? 'sup' : 'inf',
+      step: parseInt(cols[4].trim(), 10),
+      produccion: cols[5].trim().toUpperCase()
+    };
+    if (isNaN(row.step)) continue;
+    data.push(row);
+  }
+  return data;
+}
+
+const stageMap = {
+  'IMPRIMIR': 0,
+  'TERMOFORMAR': 1,
+  'PULIR': 2,       // Pulido individual (no se usará si va junto, pero lo mapeo)
+  'LISTO': 3,       // Envío (etapa 3 = ship)
+  'ENTREGADO': FINAL_STAGE  // Finalizado (etapa 4)
+};
+
+function buildCasesFromCSV(csvText) {
+  const data = parseCSV(csvText);
+  const casesMap = new Map(); // key: idPaciente (código)
+  data.forEach(row => {
+    const caseId = row.idPaciente || 'SINID';
+    if (!casesMap.has(caseId)) {
+      casesMap.set(caseId, {
+        id: uid(),
+        patient: row.nombre || caseId,
+        doctor: '',
+        doctorId: caseId,
+        delivery: '2026-12-31', // fecha lejana
+        obs: '',
+        arcadas: { sup: null, inf: null },
+        open: false,
+        _maxSteps: { sup: 0, inf: 0 }
+      });
+    }
+    const caso = casesMap.get(caseId);
+    const arcType = row.arcada;
+    if (!caso._maxSteps[arcType]) caso._maxSteps[arcType] = 0;
+    caso._maxSteps[arcType] = Math.max(caso._maxSteps[arcType], row.step);
+  });
+
+  // Crear arcadas con el total correcto y asignar estados
+  casesMap.forEach(caso => {
+    ['sup', 'inf'].forEach(at => {
+      const max = caso._maxSteps[at];
+      if (max >= 0) {
+        caso.arcadas[at] = { total: max + 1, alinStates: new Array(max + 1).fill(-1) };
+      }
+    });
+    delete caso._maxSteps;
+  });
+
+  // Asignar estados desde el CSV
+  data.forEach(row => {
+    const caseId = row.idPaciente || 'SINID';
+    const caso = casesMap.get(caseId);
+    if (!caso) return;
+    const arc = caso.arcadas[row.arcada];
+    if (!arc) return;
+    const stage = stageMap[row.produccion];
+    if (stage !== undefined && row.step < arc.total) {
+      arc.alinStates[row.step] = stage;
+    }
+  });
+
+  return Array.from(casesMap.values());
+}
+
+// ==================== ESTADO ====================
 const state = { cases: [], stock: [], kFilter: 'all', cFilter: 'all', doctorFilter: 'all' };
 
 function loadState(){
@@ -405,9 +956,14 @@ function loadState(){
       }
     }
   } catch(e) {}
-  const demo = defaultState();
-  state.cases = demo.cases;
-  state.stock = demo.stock;
+  // Importar CSV y reemplazar
+  state.cases = buildCasesFromCSV(csvRaw);
+  state.stock = [
+    {id:uid(),name:'Planchas 0.75mm',type:'Planchas',qty:45,min:30,unit:'láminas',max:200},
+    {id:uid(),name:'Planchas 1.0mm',type:'Planchas',qty:12,min:20,unit:'láminas',max:100},
+    {id:uid(),name:'Resina UV',type:'Resina',qty:3,min:2,unit:'kg',max:10},
+    {id:uid(),name:'Bolsas',type:'Packaging',qty:180,min:50,unit:'unid',max:500},
+  ];
   saveState();
 }
 
@@ -423,21 +979,22 @@ function renderAll() {
   renderKanban();
   renderCases();
   renderStock();
-  saveState();  // <-- Guardado automático
+  saveState();
 }
 const render = renderAll;
 
+// ==================== RENDERIZADOS ====================
 function countByStage() {
-  const cnt = {0:0,1:0,2:0,3:0,4:0};
+  const cnt = {0:0,1:0,2:0,3:0}; // print, thermo, cutpolish, ship
   state.cases.forEach(c => ['sup','inf'].forEach(at => {
     const a = c.arcadas[at]; if(!a) return;
-    a.alinStates.forEach(st => { if(st>=0 && st<=4) cnt[st]++; });
+    a.alinStates.forEach(st => { if(st>=0 && st<4) cnt[st]++; });
   }));
   return cnt;
 }
 function renderStats() {
-  const urg = state.cases.filter(c => getPrio(c.delivery)==='urgente').length;
-  const prox = state.cases.filter(c => getPrio(c.delivery)==='proximo').length;
+  const urg = state.cases.filter(c => getPrio(c.delivery)==='urgente' && !isCaseCompletelyFinished(c)).length;
+  const prox = state.cases.filter(c => getPrio(c.delivery)==='proximo' && !isCaseCompletelyFinished(c)).length;
   const cnt = countByStage();
   document.getElementById('statsGrid').innerHTML = `
     <div class="stat-card"><div class="stat-label">Urgentes</div><div class="stat-value ${urg>0?'urgent':''}">${urg}</div></div>
@@ -445,22 +1002,13 @@ function renderStats() {
     <div class="stat-card"><div class="stat-label">Casos</div><div class="stat-value">${state.cases.length}</div></div>
     <div class="stat-card"><div class="stat-label">Impresión</div><div class="stat-value" style="color:var(--sp)">${cnt[0]}</div></div>
     <div class="stat-card"><div class="stat-label">Termo.</div><div class="stat-value" style="color:var(--st)">${cnt[1]}</div></div>
-    <div class="stat-card"><div class="stat-label">Corte</div><div class="stat-value" style="color:var(--sc)">${cnt[2]}</div></div>
-    <div class="stat-card"><div class="stat-label">Pulido</div><div class="stat-value" style="color:var(--spo)">${cnt[3]}</div></div>
-    <div class="stat-card"><div class="stat-label">Envío</div><div class="stat-value" style="color:var(--green)">${cnt[4]}</div></div>`;
-    
-}
-  function isCaseShipped(c) {
-  return ['sup','inf'].every(at => {
-    const arc = c.arcadas[at];
-    if (!arc) return true;
-    return arc.alinStates.every(st => st === 5 || st === -1);
-  });
+    <div class="stat-card"><div class="stat-label">Corte/Pul</div><div class="stat-value" style="color:var(--sc)">${cnt[2]}</div></div>
+    <div class="stat-card"><div class="stat-label">Envío</div><div class="stat-value" style="color:var(--senv)">${cnt[3]}</div></div>`;
 }
 function renderAlerts() {
   const a = [];
   state.cases.forEach(c => {
-    if(getPrio(c.delivery)==='urgente' && !isCaseShipped(c)) {
+    if(getPrio(c.delivery)==='urgente' && !isCaseCompletelyFinished(c)) {
       const d = daysUntil(c.delivery);
       a.push({t:'red', m:`⚠ ${c.patient.split(',')[0]} — ${d<=0?'VENCIDO':d+'d'}`});
     }
@@ -494,7 +1042,7 @@ function renderKanban() {
       const rangeStr = formatRanges(it.indices);
       const cardId = `${it.c.id}-${it.at}-${stageIdx}`;
       return `<div class="arc-card ${it.p}">
-        <div class="arc-top"><div style="min-width:0;flex:1"><div class="arc-patient">${it.c.patient.split(',')[0]}</div><div class="arc-doctor">${it.c.doctor} ${it.c.doctorId?`· ${it.c.doctorId}`:''}</div></div><span class="arc-type ${it.at}">${it.at.toUpperCase()}</span></div>
+        <div class="arc-top"><div style="min-width:0;flex:1"><div class="arc-patient">${it.c.patient.split(',')[0]}</div><div class="arc-doctor">${it.c.doctorId||it.c.doctor}</div></div><span class="arc-type ${it.at}">${it.at.toUpperCase()}</span></div>
         <div class="alin-range">${rangeStr} (${it.indices.length} uds)</div>
         <div class="arc-bottom"><span class="delivery-chip ${it.p}">📅 ${d<=0?'VENCIDO':d+'d'}</span>
         <div class="quick-btns">
@@ -505,7 +1053,8 @@ function renderKanban() {
           <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
           <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
             <option value="0">Impresión</option><option value="1">Termoformado</option>
-            <option value="2">Corte</option><option value="3">Pulido</option><option value="4">Envío</option><option value="5">Finalizado</option>
+            <option value="2">Corte/Pulido</option><option value="3">Envío</option>
+            <option value="4">Finalizado</option>
           </select>
           <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="event.stopPropagation(); moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Mover</button>
         </div>
@@ -559,7 +1108,7 @@ function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
     selected.forEach(el => el.classList.remove('selected'));
     selector.classList.remove('open');
     renderAll();
-    showToast(`${count} alin. → ${targetStage === 4 ? 'Finalizado' : STAGES[targetStage]}`);
+    showToast(`${count} alin. → ${targetStage === FINAL_STAGE ? 'Finalizado' : STAGES[targetStage]}`);
   } else {
     alert('Ninguno de los alineadores seleccionados está en la etapa actual.');
   }
@@ -569,16 +1118,16 @@ function completeStage(caseId, arcType, stageIdx) {
   const c = state.cases.find(x=>x.id===caseId); if(!c) return;
   const arc = c.arcadas[arcType]; if(!arc) return;
   if(stageIdx !== null && stageIdx !== undefined) {
-    const next = stageIdx < 4 ? stageIdx + 1 : 5;  // 4 = Envío, 5 = Finalizado
+    const next = stageIdx < 3 ? stageIdx + 1 : FINAL_STAGE;
     let count = 0;
     arc.alinStates.forEach((st,i) => { if(st===stageIdx) { arc.alinStates[i]=next; count++; } });
-    if(count>0) { renderAll(); showToast(`${count} uds → ${next===4?'Finalizado ✓':STAGES[next]}`); }
+    if(count>0) { renderAll(); showToast(`${count} uds → ${next===FINAL_STAGE?'Finalizado ✓':STAGES[next]}`); }
     else showToast('Sin alineadores en esa etapa');
   } else {
     let count = 0;
     arc.alinStates.forEach((st,i) => {
       if(st>=0 && st<3) { arc.alinStates[i]=st+1; count++; }
-      else if(st===3) { arc.alinStates[i]=4; count++; }
+      else if(st===3) { arc.alinStates[i]=FINAL_STAGE; count++; }
     });
     if(count>0) { renderAll(); showToast(`${count} alineadores avanzados`); }
     else showToast('Nada para avanzar');
@@ -593,7 +1142,7 @@ function renderCases() {
   if (state.doctorFilter !== 'all') list = list.filter(c => c.doctorId === state.doctorFilter);
   const bmap = {urgente:'<span class="case-badge urgente">⚠ URGENTE</span>',proximo:'<span class="case-badge proximo">● PRÓXIMO</span>',ok:'<span class="case-badge ok">✓ OK</span>'};
   const dcol = {urgente:'var(--red)',proximo:'var(--yellow)',ok:'var(--green)'};
-  const clsMap = ['print','thermo','cut','polish','ship'];
+  const clsMap = ['print','thermo','cutpolish','ship'];
   document.getElementById('casesList').innerHTML = list.map(c => {
     const p = getPrio(c.delivery); const d = daysUntil(c.delivery);
     const arcHtml = ['sup','inf'].map(at => {
@@ -602,19 +1151,18 @@ function renderCases() {
       const selSame = selection.caseId===c.id && selection.arcType===at;
       const chips = arc.alinStates.map((st,i) => {
         let cls = 'pendiente';
-        if(st>=0 && st<=3) cls = clsMap[st];
-        else if(st===4) cls = 'done';
+        if(st>=0 && st<4) cls = clsMap[st];
+        else if(st===FINAL_STAGE) cls = 'done';
         const sel = selSame && selection.indices.has(i) ? ' selected' : '';
-        return `<span class="alin-chip ${cls}${sel}" onclick="event.stopPropagation();toggleAlin('${c.id}','${at}',${i})">${i}${st===4?'✓':''}</span>`;
+        return `<span class="alin-chip ${cls}${sel}" onclick="event.stopPropagation();toggleAlin('${c.id}','${at}',${i})">${i}${st===FINAL_STAGE?'✓':''}</span>`;
       }).join('');
       const selCount = selSame ? selection.indices.size : 0;
       const actHtml = selCount > 0 ? `
         <div class="arcada-actions">
           <select id="moveTarget-${c.id}-${at}" class="form-input" style="width:auto;padding:4px 8px;font-size:10px">
             <option value="0">Impresión</option><option value="1">Termoformado</option>
-            <option value="2">Corte</option><option value="3">Pulido</option>
-            <option value="4">Envío</option>
-            <option value="5">Finalizado</option>
+            <option value="2">Corte/Pulido</option><option value="3">Envío</option>
+            <option value="4">Finalizado</option>
           </select>
           <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="moveSelected('${c.id}','${at}')">Mover ${selCount}</button>
           <button class="qbtn" style="color:var(--text3)" onclick="clearSelection()">✕</button>
@@ -630,7 +1178,7 @@ function renderCases() {
       <div class="case-header">
         <div class="case-info" onclick="toggleCase('${c.id}')">
           <div class="case-prio-dot" style="background:${dcol[p]}"></div>
-          <div><div class="case-name">${c.patient}</div><div class="case-doctor">${c.doctor} ${c.doctorId ? `· ${c.doctorId}` : ''}</div></div>
+          <div><div class="case-name">${c.patient}</div><div class="case-doctor">${c.doctorId||c.doctor}</div></div>
         </div>
         <div class="case-right">
           ${bmap[p]} <span class="case-days" style="${d<=0?'color:var(--red)':''}">${d<=0?'VENCIDO':d+'d'}</span>
@@ -669,7 +1217,7 @@ function moveSelected(caseId, arcType) {
   selection.indices.forEach(i => { arc.alinStates[i] = target; });
   clearSelection();
   renderAll();
-  showToast(`${selection.indices.size} alin. → ${target===4?'Finalizado':STAGES[target]}`);
+  showToast(`${selection.indices.size} alin. → ${target===FINAL_STAGE?'Finalizado':STAGES[target]}`);
 }
 
 // ==================== CRUD CASOS ====================
