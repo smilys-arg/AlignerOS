@@ -64,9 +64,10 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 .filter-label{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;flex-shrink:0;font-weight:500}
 .filter-btn{padding:6px 14px;border-radius:4px;font-size:11px;border:1px solid var(--border);background:var(--surface);color:var(--text2);cursor:pointer;font-family:'Inter',sans-serif;white-space:nowrap;flex-shrink:0;touch-action:manipulation;transition:all .15s}
 .filter-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(37,99,235,.06)}
+.filter-input{padding:6px 10px;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);font-size:11px;font-family:'Inter',sans-serif;outline:none;width:120px;margin-left:4px}
+.filter-input:focus{border-color:var(--accent)}
 
 .kanban-wrap{overflow-x:auto;scrollbar-width:none;margin:0 -18px;padding:0 18px 6px}
-/* 5 columnas */
 .kanban{display:grid;grid-template-columns:repeat(5,minmax(200px,1fr));gap:10px;min-width:1200px}
 .kanban-col{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow-sm)}
 .col-header{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface2)}
@@ -134,8 +135,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 .alin-chip{width:30px;height:24px;border-radius:4px;font-size:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;font-weight:600;border:1px solid transparent;background:var(--border);color:var(--text2);user-select:none}
 .alin-chip.print{background:rgba(37,99,235,.12);color:var(--accent);border-color:rgba(37,99,235,.25)}
 .alin-chip.thermo{background:rgba(124,58,237,.12);color:var(--st);border-color:rgba(124,58,237,.25)}
-.alin-chip.cut{background:rgba(234,88,12,.12);color:var(--sc);border-color:rgba(234,88,12,.25)}
-.alin-chip.polish{background:rgba(8,145,178,.12);color:var(--spo);border-color:rgba(8,145,178,.25)}
+.alin-chip.cutpolish{background:rgba(234,88,12,.12);color:var(--sc);border-color:rgba(234,88,12,.25)}
 .alin-chip.ship{background:rgba(22,163,74,.12);color:var(--green);border-color:rgba(22,163,74,.25)}
 .alin-chip.pendiente{background:var(--border);color:var(--text3);opacity:.6}
 .alin-chip.done{background:rgba(100,116,139,.1);color:var(--done);border-color:rgba(100,116,139,.2);text-decoration:line-through}
@@ -145,7 +145,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 .obs-note{margin-top:10px;font-size:11px;color:var(--text3)}
 
 .stock-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
-.stock-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow-sm)}
+.stock-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow-sm);position:relative}
 .stock-name{font-size:13px;font-weight:600;margin-bottom:4px}
 .stock-type-lbl{font-size:10px;color:var(--text3);margin-bottom:12px}
 .stock-level-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
@@ -164,6 +164,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 .stock-btn.primary:hover{background:rgba(22,163,74,.06)}
 .stock-btn.danger{border-color:rgba(220,38,38,.4);color:var(--red)}
 .stock-btn.danger:hover{background:rgba(220,38,38,.06)}
+.stock-edit-btn{position:absolute;top:8px;right:8px;background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:4px}
 
 .bottom-nav{display:none;position:fixed;bottom:0;left:0;right:0;height:calc(var(--nav-h) + var(--safe-b));background:var(--surface);border-top:1px solid var(--border);z-index:100;flex-direction:column;padding-bottom:var(--safe-b)}
 .bottom-nav-inner{display:flex;height:var(--nav-h)}
@@ -227,6 +228,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
       <button class="filter-btn" onclick="setFilter('proximo',this)">Próximos</button>
       <button class="filter-btn" onclick="setFilter('sup',this)">Superior</button>
       <button class="filter-btn" onclick="setFilter('inf',this)">Inferior</button>
+      <input class="filter-input" type="text" id="patientFilterInput" placeholder="Paciente..." oninput="filterByPatient()">
     </div>
     <div class="kanban-wrap"><div class="kanban" id="kanban"></div></div>
   </div>
@@ -238,9 +240,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
         <button class="filter-btn active" onclick="setCasosFilter('all',this)">Todos</button>
         <button class="filter-btn" onclick="setCasosFilter('urgente',this)">Urgentes</button>
         <button class="filter-btn" onclick="setCasosFilter('proximo',this)">Próximos</button>
-        <select id="doctorFilter" class="form-input" style="width:auto;padding:6px 10px;font-size:11px" onchange="filterByDoctor()">
-          <option value="all">Todos los doctores</option>
-        </select>
+        <input class="filter-input" type="text" id="doctorFilterInput" placeholder="Doctor (ej. GM)..." oninput="filterByDoctor()">
       </div>
     </div>
     <div class="cases-list" id="casesList"></div>
@@ -264,7 +264,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 </nav>
 <button class="fab" onclick="openNewCase()">+</button>
 
-<!-- Modales (se mantienen igual) -->
+<!-- Modales -->
 <div class="modal-overlay" id="newCaseModal">
   <div class="modal">
     <button class="modal-close" onclick="closeModal('newCaseModal')">&times;</button>
@@ -286,7 +286,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
   <div class="modal">
     <button class="modal-close" onclick="closeModal('stockModal')">&times;</button>
     <div class="modal-handle"></div>
-    <div class="modal-title">Agregar material</div>
+    <div class="modal-title" id="stockModalTitle">Agregar material</div>
     <div class="form-grid">
       <div class="form-group full"><label class="form-label">Nombre</label><input class="form-input" id="sm-name"></div>
       <div class="form-group"><label class="form-label">Tipo</label><select class="form-input" id="sm-type"><option>Planchas</option><option>Resina</option><option>Packaging</option></select></div>
@@ -294,7 +294,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
       <div class="form-group"><label class="form-label">Stock</label><input class="form-input" id="sm-qty" type="number"></div>
       <div class="form-group"><label class="form-label">Mínimo</label><input class="form-input" id="sm-min" type="number"></div>
     </div>
-    <div class="form-actions"><button class="btn-cancel" onclick="closeModal('stockModal')">Cancelar</button><button class="btn-submit" onclick="submitStock()">Guardar</button></div>
+    <div class="form-actions"><button class="btn-cancel" onclick="closeModal('stockModal')">Cancelar</button><button class="btn-submit" id="stockSubmitBtn" onclick="submitStock()">Guardar</button></div>
   </div>
 </div>
 <div class="modal-overlay" id="reponerModal">
@@ -315,7 +315,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 <div class="toast" id="toast"></div>
 
 <script>
-// ==================== PWA (sin service worker) ====================
+// ==================== PWA ====================
 (function() {
   const manifest = {
     name: "AlignerOS",
@@ -338,15 +338,13 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 })();
 
 // ===================================================================
-//  AlignerOS · Datos reales + Envío
-// ===================================================================
 const STAGES = ['Impresión','Termoformado','Corte / Pulido','Envío'];
-const SKEYS = ['print','thermo','cutpolish','ship']; // cutpolish = corte+pulido juntos
+const SKEYS = ['print','thermo','cutpolish','ship'];
 const SCOLS = {print:'#2563eb',thermo:'#7c3aed',cutpolish:'#ea580c',ship:'#16a34a'};
-const FINAL_STAGE = 4; // Finalizado = etapa 4 (no se muestra en kanban, solo en casos)
+const FINAL_STAGE = 4;
 const LS_KEY = 'aligner_data_v1';
 
-let repCtx = null, editingCaseId = null;
+let repCtx = null, editingCaseId = null, editingStockId = null;
 let selection = { caseId:null, arcType:null, indices:new Set() };
 
 function uid(){ return Math.random().toString(36).slice(2,9); }
@@ -368,7 +366,6 @@ function formatRanges(indices){
   parts.push(start===end?`${start}`:`${start}-${end}`);
   return parts.join(',');
 }
-
 function isCaseCompletelyFinished(c) {
   return ['sup','inf'].every(at => {
     const arc = c.arcadas[at];
@@ -377,7 +374,7 @@ function isCaseCompletelyFinished(c) {
   });
 }
 
-// ==================== IMPORTACIÓN DESDE CSV (tus datos) ====================
+// ==================== CSV ====================
 const csvRaw = `ID Paciente,Nombre Paciente,Alineador,Arcada (S/I),# (Step),PRODUCCION
 GE01,Martina Cutrera,GE01S0,S,0,ENTREGADO
 GE01,Martina Cutrera,GE01S1,S,1,ENTREGADO
@@ -861,6 +858,8 @@ GM00,Nadia,GM00I7,I,7,TERMOFORMAR
 GM00,Nadia,GM00I8,I,8,TERMOFORMAR
 GM00,Nadia,GM00I9,I,9,TERMOFORMAR`;
 
+const stageMap = { 'IMPRIMIR':0, 'TERMOFORMAR':1, 'PULIR':2, 'LISTO':3, 'ENTREGADO':FINAL_STAGE };
+
 function parseCSV(csvText) {
   const lines = csvText.split('\n').filter(line => line.trim());
   const headers = lines[0].split(',');
@@ -882,17 +881,9 @@ function parseCSV(csvText) {
   return data;
 }
 
-const stageMap = {
-  'IMPRIMIR': 0,
-  'TERMOFORMAR': 1,
-  'PULIR': 2,       // Pulido individual (no se usará si va junto, pero lo mapeo)
-  'LISTO': 3,       // Envío (etapa 3 = ship)
-  'ENTREGADO': FINAL_STAGE  // Finalizado (etapa 4)
-};
-
 function buildCasesFromCSV(csvText) {
   const data = parseCSV(csvText);
-  const casesMap = new Map(); // key: idPaciente (código)
+  const casesMap = new Map();
   data.forEach(row => {
     const caseId = row.idPaciente || 'SINID';
     if (!casesMap.has(caseId)) {
@@ -901,31 +892,30 @@ function buildCasesFromCSV(csvText) {
         patient: row.nombre || caseId,
         doctor: '',
         doctorId: caseId,
-        delivery: '2026-12-31', // fecha lejana
+        delivery: '2026-12-31',
         obs: '',
         arcadas: { sup: null, inf: null },
         open: false,
-        _maxSteps: { sup: 0, inf: 0 }
+        _maxSteps: { sup: -1, inf: -1 }
       });
     }
     const caso = casesMap.get(caseId);
     const arcType = row.arcada;
-    if (!caso._maxSteps[arcType]) caso._maxSteps[arcType] = 0;
-    caso._maxSteps[arcType] = Math.max(caso._maxSteps[arcType], row.step);
+    if (caso._maxSteps[arcType] < row.step) caso._maxSteps[arcType] = row.step;
   });
 
-  // Crear arcadas con el total correcto y asignar estados
   casesMap.forEach(caso => {
     ['sup', 'inf'].forEach(at => {
       const max = caso._maxSteps[at];
       if (max >= 0) {
         caso.arcadas[at] = { total: max + 1, alinStates: new Array(max + 1).fill(-1) };
+      } else {
+        caso.arcadas[at] = null; // maxilar sin alineadores
       }
     });
     delete caso._maxSteps;
   });
 
-  // Asignar estados desde el CSV
   data.forEach(row => {
     const caseId = row.idPaciente || 'SINID';
     const caso = casesMap.get(caseId);
@@ -942,7 +932,11 @@ function buildCasesFromCSV(csvText) {
 }
 
 // ==================== ESTADO ====================
-const state = { cases: [], stock: [], kFilter: 'all', cFilter: 'all', doctorFilter: 'all' };
+const state = {
+  cases: [], stock: [],
+  kFilter: 'all', cFilter: 'all',
+  patientFilter: '', doctorFilter: ''
+};
 
 function loadState(){
   try {
@@ -956,7 +950,6 @@ function loadState(){
       }
     }
   } catch(e) {}
-  // Importar CSV y reemplazar
   state.cases = buildCasesFromCSV(csvRaw);
   state.stock = [
     {id:uid(),name:'Planchas 0.75mm',type:'Planchas',qty:45,min:30,unit:'láminas',max:200},
@@ -983,9 +976,8 @@ function renderAll() {
 }
 const render = renderAll;
 
-// ==================== RENDERIZADOS ====================
 function countByStage() {
-  const cnt = {0:0,1:0,2:0,3:0}; // print, thermo, cutpolish, ship
+  const cnt = {0:0,1:0,2:0,3:0};
   state.cases.forEach(c => ['sup','inf'].forEach(at => {
     const a = c.arcadas[at]; if(!a) return;
     a.alinStates.forEach(st => { if(st>=0 && st<4) cnt[st]++; });
@@ -1021,6 +1013,7 @@ function renderAlerts() {
 // ==================== KANBAN ====================
 function renderKanban() {
   const f = state.kFilter;
+  const patientFilter = state.patientFilter.toLowerCase();
   document.getElementById('kanban').innerHTML = SKEYS.map((key, stageIdx) => {
     const color = Object.values(SCOLS)[stageIdx];
     let cards = [];
@@ -1029,6 +1022,7 @@ function renderKanban() {
       const indices = [];
       arc.alinStates.forEach((st,i) => { if(st===stageIdx) indices.push(i); });
       if(!indices.length) return;
+      if (patientFilter && !c.patient.toLowerCase().includes(patientFilter)) return;
       const p = getPrio(c.delivery);
       if(f==='urgente' && p!=='urgente') return;
       if(f==='proximo' && p!=='proximo') return;
@@ -1062,6 +1056,11 @@ function renderKanban() {
     }).join('') : `<div class="empty-col"><div class="empty-icon">◌</div>Sin pendientes</div>`;
     return `<div class="kanban-col"><div class="col-header"><div class="col-title"><div class="col-dot" style="background:${color}"></div>${STAGES[stageIdx]}</div><span class="col-count">${cards.length}</span></div><div class="col-body">${body}</div></div>`;
   }).join('');
+}
+
+function filterByPatient() {
+  state.patientFilter = document.getElementById('patientFilterInput').value;
+  renderKanban();
 }
 
 function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
@@ -1139,14 +1138,18 @@ function renderCases() {
   const f = state.cFilter;
   let list = state.cases;
   if (f !== 'all') list = list.filter(c => getPrio(c.delivery) === f);
-  if (state.doctorFilter !== 'all') list = list.filter(c => c.doctorId === state.doctorFilter);
+  if (state.doctorFilter) {
+    const df = state.doctorFilter.toLowerCase();
+    list = list.filter(c => c.doctorId.toLowerCase().startsWith(df));
+  }
   const bmap = {urgente:'<span class="case-badge urgente">⚠ URGENTE</span>',proximo:'<span class="case-badge proximo">● PRÓXIMO</span>',ok:'<span class="case-badge ok">✓ OK</span>'};
   const dcol = {urgente:'var(--red)',proximo:'var(--yellow)',ok:'var(--green)'};
   const clsMap = ['print','thermo','cutpolish','ship'];
   document.getElementById('casesList').innerHTML = list.map(c => {
     const p = getPrio(c.delivery); const d = daysUntil(c.delivery);
     const arcHtml = ['sup','inf'].map(at => {
-      const arc = c.arcadas[at]; if(!arc) return '';
+      const arc = c.arcadas[at];
+      if (!arc) return ''; // no mostrar bloque si no hay alineadores
       const lbl = at==='sup'?'▲ Superior':'▼ Inferior';
       const selSame = selection.caseId===c.id && selection.arcType===at;
       const chips = arc.alinStates.map((st,i) => {
@@ -1190,12 +1193,12 @@ function renderCases() {
       ${c.open ? `<div class="case-body"><div class="arcadas-grid">${arcHtml}</div>${c.obs ? `<div class="obs-note">📝 ${c.obs}</div>` : ''}</div>` : ''}
     </div>`;
   }).join('');
-  const doctorSelect = document.getElementById('doctorFilter');
-  const doctors = [...new Set(state.cases.map(c => c.doctorId).filter(Boolean))];
-  doctorSelect.innerHTML = '<option value="all">Todos los doctores</option>' + doctors.map(id => `<option value="${id}">${id}</option>`).join('');
-  doctorSelect.value = state.doctorFilter;
 }
-function filterByDoctor() { state.doctorFilter = document.getElementById('doctorFilter').value; renderCases(); }
+
+function filterByDoctor() {
+  state.doctorFilter = document.getElementById('doctorFilterInput').value;
+  renderCases();
+}
 
 function clearSelection() { selection={caseId:null,arcType:null,indices:new Set()}; renderCases(); }
 function toggleAlin(caseId, arcType, idx) {
@@ -1283,6 +1286,7 @@ function renderStock() {
     const pct = Math.min(100, (s.qty/s.max)*100);
     const lv = s.qty <= s.min ? 'low' : s.qty <= s.min*1.5 ? 'medium' : 'good';
     return `<div class="stock-card">
+      <button class="stock-edit-btn" onclick="editStock('${s.id}')">✎</button>
       <div class="stock-name">${s.name}</div><div class="stock-type-lbl">${s.type}</div>
       <div class="stock-level-row"><span class="stock-qty ${lv}">${s.qty}</span><span class="stock-unit-lbl">${s.unit}</span></div>
       <div class="stock-bar-bg"><div class="stock-bar ${lv}" style="width:${pct}%"></div></div>
@@ -1298,21 +1302,47 @@ function renderStock() {
     </div>`;
   }).join('');
 }
-function openStockModal() { openModal('stockModal'); }
+function openStockModal() {
+  editingStockId = null;
+  document.getElementById('stockModalTitle').textContent = 'Agregar material';
+  document.getElementById('stockSubmitBtn').textContent = 'Guardar';
+  ['sm-name','sm-unit','sm-qty','sm-min'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('sm-type').value = 'Planchas';
+  openModal('stockModal');
+}
+function editStock(id) {
+  const s = state.stock.find(x=>x.id===id);
+  if (!s) return;
+  editingStockId = id;
+  document.getElementById('stockModalTitle').textContent = 'Editar material';
+  document.getElementById('stockSubmitBtn').textContent = 'Guardar cambios';
+  document.getElementById('sm-name').value = s.name;
+  document.getElementById('sm-type').value = s.type;
+  document.getElementById('sm-unit').value = s.unit;
+  document.getElementById('sm-qty').value = s.qty;
+  document.getElementById('sm-min').value = s.min;
+  openModal('stockModal');
+}
 function submitStock() {
   const name = document.getElementById('sm-name').value.trim();
-  if(!name) { alert('Nombre requerido'); return; }
-  state.stock.push({
-    id: uid(), name,
-    type: document.getElementById('sm-type').value,
-    unit: document.getElementById('sm-unit').value.trim() || 'unid',
-    qty: parseInt(document.getElementById('sm-qty').value) || 0,
-    min: parseInt(document.getElementById('sm-min').value) || 10,
-    max: 200
-  });
+  if (!name) { alert('Nombre requerido'); return; }
+  const type = document.getElementById('sm-type').value;
+  const unit = document.getElementById('sm-unit').value.trim() || 'unid';
+  const qty = parseInt(document.getElementById('sm-qty').value) || 0;
+  const min = parseInt(document.getElementById('sm-min').value) || 10;
+
+  if (editingStockId) {
+    const s = state.stock.find(x=>x.id===editingStockId);
+    if (s) {
+      s.name = name; s.type = type; s.unit = unit; s.qty = qty; s.min = min;
+    }
+    editingStockId = null;
+  } else {
+    state.stock.push({ id:uid(), name, type, unit, qty, min, max: 200 });
+  }
   closeModal('stockModal');
   renderAll();
-  showToast('Material agregado ✓');
+  showToast(editingStockId ? 'Material actualizado ✓' : 'Material agregado ✓');
 }
 function adjStock(id, delta) { const s = state.stock.find(x=>x.id===id); if(s) { s.qty = Math.max(0, s.qty+delta); renderAll(); } }
 function deleteStock(id) { if(confirm('Eliminar?')) { state.stock = state.stock.filter(s=>s.id!==id); renderAll(); } }
