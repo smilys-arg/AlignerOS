@@ -400,7 +400,7 @@ function loadState(){
       if (data.cases && data.stock) {
         state.cases = data.cases;
         state.stock = data.stock;
-        return true;
+        return;
       }
     }
   } catch(e) {}
@@ -408,7 +408,6 @@ function loadState(){
   state.cases = demo.cases;
   state.stock = demo.stock;
   saveState();
-  return false;
 }
 
 function saveState(){
@@ -423,11 +422,10 @@ function renderAll() {
   renderKanban();
   renderCases();
   renderStock();
-  saveState();  // <-- Guardado automático en cada cambio
+  saveState();  // <-- Guardado automático
 }
 const render = renderAll;
 
-// ==================== RENDERIZADOS ====================
 function countByStage() {
   const cnt = {0:0,1:0,2:0,3:0};
   state.cases.forEach(c => ['sup','inf'].forEach(at => {
@@ -462,7 +460,7 @@ function renderAlerts() {
   document.getElementById('alertsBar').innerHTML = a.map(x => `<div class="alert-pill ${x.t}"><div class="alert-dot"></div>${x.m}</div>`).join('');
 }
 
-// ==================== KANBAN CON SELECCIÓN DIRECTA ====================
+// ==================== KANBAN ====================
 function renderKanban() {
   const f = state.kFilter;
   document.getElementById('kanban').innerHTML = SKEYS.map((key, stageIdx) => {
@@ -553,7 +551,7 @@ function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
     renderAll();
     showToast(`${count} alin. → ${targetStage === 4 ? 'Finalizado' : STAGES[targetStage]}`);
   } else {
-    alert('Ninguno de los alineadores seleccionados está en la etapa actual. Probá recargar el selector.');
+    alert('Ninguno de los alineadores seleccionados está en la etapa actual.');
   }
 }
 
@@ -721,6 +719,26 @@ function deleteCase(id) {
 }
 
 // ==================== STOCK ====================
+function renderStock() {
+  document.getElementById('stockGrid').innerHTML = state.stock.map(s => {
+    const pct = Math.min(100, (s.qty/s.max)*100);
+    const lv = s.qty <= s.min ? 'low' : s.qty <= s.min*1.5 ? 'medium' : 'good';
+    return `<div class="stock-card">
+      <div class="stock-name">${s.name}</div><div class="stock-type-lbl">${s.type}</div>
+      <div class="stock-level-row"><span class="stock-qty ${lv}">${s.qty}</span><span class="stock-unit-lbl">${s.unit}</span></div>
+      <div class="stock-bar-bg"><div class="stock-bar ${lv}" style="width:${pct}%"></div></div>
+      <div class="stock-min-lbl">Mínimo: ${s.min} ${s.unit}</div>
+      ${lv==='low'?`<div class="stock-alert-msg">⚠ Stock bajo</div>`:''}
+      <div class="stock-actions">
+        <button class="stock-btn" onclick="adjStock('${s.id}',-1)">−1</button>
+        <button class="stock-btn" onclick="adjStock('${s.id}',-5)">−5</button>
+        <button class="stock-btn primary" onclick="adjStock('${s.id}',10)">+10</button>
+        <button class="stock-btn primary" onclick="openReponer('${s.id}')">↑ Rep.</button>
+        <button class="stock-btn danger" onclick="deleteStock('${s.id}')">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
 function openStockModal() { openModal('stockModal'); }
 function submitStock() {
   const name = document.getElementById('sm-name').value.trim();
