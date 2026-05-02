@@ -548,7 +548,7 @@ function renderKanban() {
           <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
             <option value="0">Impresión</option><option value="1">Termoformado</option><option value="2">Corte</option><option value="3">Pulido</option><option value="4">Finalizado</option>
           </select>
-          <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}','${stageIdx}')">Mover</button>
+          <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="event.stopPropagation(); moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}','${stageIdx}')">Mover</button>
         </div>
       </div>`;
     }).join('') : `<div class="empty-col"><div class="empty-icon">◌</div>Sin pendientes</div>`;
