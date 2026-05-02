@@ -213,11 +213,6 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
     <button class="tab" onclick="switchView('stock',this)">Stock</button>
   </nav>
   <div class="header-right">
-    <div class="sync-indicator" id="syncIndicator">
-      <span class="sync-dot offline" id="syncDot"></span>
-      <span id="syncText">Offline</span>
-    </div>
-    <span class="date-chip" id="dateChip"></span>
     <button class="btn-new" onclick="openNewCase()">+ Nuevo caso</button>
   </div>
 </header>
@@ -321,10 +316,6 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 
 <div class="toast" id="toast"></div>
 
-<!-- Firebase SDK -->
-<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
-<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
-
 <script>
 // ==================== PWA (sin service worker para evitar caché) ====================
 (function() {
@@ -352,26 +343,13 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
   }
 })();
 
-// ==================== FIREBASE ====================
-const firebaseConfig = {
-  apiKey: "AIzaSyCSsY1tA5AFzIVj-Tbg-XjxoKY73W0YPZs",
-  authDomain: "alingneros.firebaseapp.com",
-  databaseURL: "https://alingneros-default-rtdb.firebaseio.com",
-  projectId: "alingneros",
-  storageBucket: "alingneros.firebasestorage.app",
-  messagingSenderId: "868408246733",
-  appId: "1:868408246733:web:4affa1c056767283b10484"
-};
-firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
-
 // ==================== ESTADO ====================
 const STAGES = ['Impresión','Termoformado','Corte','Pulido'];
 const SKEYS = ['print','thermo','cut','polish'];
 const SCOLS = {print:'#2563eb',thermo:'#7c3aed',cut:'#ea580c',polish:'#0891b2'};
-const LS_KEY = 'alignerOS_v2';
+const LS_KEY = 'alignerOS_lab';
 
-let pendingWrite = null, writeTimer = null, repCtx = null, editingCaseId = null;
+let repCtx = null, editingCaseId = null;
 let selection = { caseId:null, arcType:null, indices:new Set() };
 
 function uid(){ return Math.random().toString(36).slice(2,9); }
@@ -418,49 +396,33 @@ function defaultState(){
   ]};
 }
 
-const state = { cases: [], stock: [], kFilter: 'all', cFilter: 'all', doctorFilter: 'all' };
+const state = {
+  cases: [],
+  stock: [],
+  kFilter: 'all',
+  cFilter: 'all',
+  doctorFilter: 'all'
+};
 
-function loadLocal() {
-  try { const s = localStorage.getItem(LS_KEY); return s ? JSON.parse(s) : defaultState(); }
-  catch { return defaultState(); }
-}
-function saveLocal(data) { localStorage.setItem(LS_KEY, JSON.stringify(data)); }
-function pushToFirebase() {
-  if (db) {
-    pendingWrite = { cases: state.cases, stock: state.stock };
-    clearTimeout(writeTimer);
-    writeTimer = setTimeout(() => {
-      if (pendingWrite) {
-        db.ref('/').set(pendingWrite, (error) => {
-          if (error) console.error("Firebase write failed:", error);
-          else pendingWrite = null;
-        });
-      }
-    }, 300);
-  }
+function loadState() {
+  try {
+    const saved = localStorage.getItem(LS_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed.cases && parsed.stock) return parsed;
+    }
+  } catch(e) {}
+  return defaultState();
 }
 
-const saved = loadLocal();
+function saveState() {
+  localStorage.setItem(LS_KEY, JSON.stringify({ cases: state.cases, stock: state.stock }));
+}
+
+// Inicializar estado desde localStorage
+const saved = loadState();
 state.cases = saved.cases;
 state.stock = saved.stock;
-
-db.ref('/').on('value', snap => {
-  const remote = snap.val();
-  if (remote && remote.cases && remote.stock && !pendingWrite) {
-    state.cases = remote.cases;
-    state.stock = remote.stock;
-    clearSelection();
-    renderAll();
-    updateSyncStatus(true);
-  }
-});
-db.ref('.info/connected').on('value', snap => updateSyncStatus(snap.val() === true));
-function updateSyncStatus(online) {
-  const dot = document.getElementById('syncDot');
-  const txt = document.getElementById('syncText');
-  if (online) { dot.className = 'sync-dot'; txt.textContent = 'Sincronizado'; }
-  else { dot.className = 'sync-dot offline'; txt.textContent = 'Offline'; }
-}
 
 function renderAll() {
   renderStats();
@@ -468,8 +430,7 @@ function renderAll() {
   renderKanban();
   renderCases();
   renderStock();
-  saveLocal({ cases: state.cases, stock: state.stock });
-  pushToFirebase();
+  saveState(); // Guardar automáticamente cada vez que se renderiza
 }
 const render = renderAll;
 
@@ -839,9 +800,7 @@ function showToast(msg) {
 }
 
 // ==================== INICIAR ====================
-document.getElementById('dateChip').textContent = new Date().toLocaleDateString('es-ES',{weekday:'long',day:'numeric',month:'long'});
 document.getElementById('bn-kanban').classList.add('active');
-updateSyncStatus(false);
 renderAll();
 </script>
 </body>
