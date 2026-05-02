@@ -326,7 +326,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
 
 <script>
-// ==================== PWA INLINE ====================
+// ==================== PWA (sin service worker para evitar caché) ====================
 (function() {
   const manifest = {
     name: "AlignerOS",
@@ -346,12 +346,9 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
   link.href = manifestURL;
   document.head.appendChild(link);
 
+  // Limpiar cualquier service worker viejo que pueda estar cacheando
   if ('serviceWorker' in navigator) {
-    const swCode = `self.addEventListener('install', e => e.waitUntil(caches.open('ao-v1').then(c => c.addAll([self.location.href]))));
-      self.addEventListener('fetch', e => e.respondWith(caches.match(e.request).then(r => r || fetch(e.request))));`;
-    const swBlob = new Blob([swCode], { type: 'application/javascript' });
-    const swURL = URL.createObjectURL(swBlob);
-    navigator.serviceWorker.register(swURL);
+    navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
   }
 })();
 
@@ -443,6 +440,10 @@ function pushToFirebase() {
   }
 }
 
+const saved = loadLocal();
+state.cases = saved.cases;
+state.stock = saved.stock;
+
 db.ref('/').on('value', snap => {
   const remote = snap.val();
   if (remote && remote.cases && remote.stock && !pendingWrite) {
@@ -460,10 +461,6 @@ function updateSyncStatus(online) {
   if (online) { dot.className = 'sync-dot'; txt.textContent = 'Sincronizado'; }
   else { dot.className = 'sync-dot offline'; txt.textContent = 'Offline'; }
 }
-
-const saved = loadLocal();
-state.cases = saved.cases;
-state.stock = saved.stock;
 
 function renderAll() {
   renderStats();
@@ -532,7 +529,7 @@ function renderKanban() {
     const body = cards.length ? cards.map(it => {
       const d = daysUntil(it.c.delivery);
       const rangeStr = formatRanges(it.indices);
-      const cardId = `${it.c.id}-${it.at}-${stageIdx}`; // Único por etapa
+      const cardId = `${it.c.id}-${it.at}-${stageIdx}`;
       return `<div class="arc-card ${it.p}">
         <div class="arc-top"><div style="min-width:0;flex:1"><div class="arc-patient">${it.c.patient.split(',')[0]}</div><div class="arc-doctor">${it.c.doctor} ${it.c.doctorId?`· ${it.c.doctorId}`:''}</div></div><span class="arc-type ${it.at}">${it.at.toUpperCase()}</span></div>
         <div class="alin-range">${rangeStr} (${it.indices.length} uds)</div>
@@ -568,9 +565,7 @@ function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
   const arc = c.arcadas[arcType];
   if (!arc) return;
   const indices = [];
-  arc.alinStates.forEach((st, i) => {
-    if (st === stageIdx) indices.push(i);
-  });
+  arc.alinStates.forEach((st, i) => { if (st === stageIdx) indices.push(i); });
 
   const grid = document.getElementById(`ksel-grid-${cardId}`);
   grid.innerHTML = indices.map(i =>
