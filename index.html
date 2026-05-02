@@ -547,7 +547,7 @@ function renderKanban() {
           <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
           <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
             <option value="0">Impresión</option><option value="1">Termoformado</option><option value="2">Corte</option><option value="3">Pulido</option><option value="4">Finalizado</option>
-          </select>
+          </select> event.stopPropagation();
           <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}','${stageIdx}')">Mover</button>
         </div>
       </div>`;
@@ -560,40 +560,64 @@ function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
   const selector = document.getElementById(`ksel-${cardId}`);
   if (!selector) return;
   const isOpen = selector.classList.contains('open');
-  // Cerrar todos
+  // Cerrar todos los selectores abiertos primero
   document.querySelectorAll('.kanban-alin-selector.open').forEach(s => s.classList.remove('open'));
   if (isOpen) return;
-  selector.classList.add('open');
-  // Llenar chips
+
   const c = state.cases.find(x => x.id === caseId);
   if (!c) return;
   const arc = c.arcadas[arcType];
+  if (!arc) return;
   const indices = [];
-  arc.alinStates.forEach((st, i) => { if (st === stageIdx) indices.push(i); });
+  arc.alinStates.forEach((st, i) => {
+    if (st === stageIdx) indices.push(i);
+  });
+
   const grid = document.getElementById(`ksel-grid-${cardId}`);
-  grid.innerHTML = indices.map(i => `<span class="kanban-alin-item" data-idx="${i}" onclick="this.classList.toggle('selected')">${i}</span>`).join('');
+  grid.innerHTML = indices.map(i =>
+    `<span class="kanban-alin-item" data-idx="${i}" onclick="event.stopPropagation(); this.classList.toggle('selected')">${i}</span>`
+  ).join('');
+
+  selector.classList.add('open');
 }
 
 function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
+  // Asegurar que currentStageIdx sea número
+  currentStageIdx = parseInt(currentStageIdx, 10);
   const selector = document.getElementById(`ksel-${cardId}`);
+  if (!selector) return;
+
   const selected = selector.querySelectorAll('.kanban-alin-item.selected');
-  if (selected.length === 0) { alert('Seleccioná al menos un alineador'); return; }
-  const targetStage = parseInt(document.getElementById(`ksel-stage-${cardId}`).value);
+  if (selected.length === 0) {
+    alert('Seleccioná al menos un alineador');
+    return;
+  }
+
+  const targetStage = parseInt(document.getElementById(`ksel-stage-${cardId}`).value, 10);
+  if (isNaN(targetStage)) return;
+
   const c = state.cases.find(x => x.id === caseId);
   if (!c) return;
   const arc = c.arcadas[arcType];
+  if (!arc) return;
+
   let count = 0;
   selected.forEach(el => {
-    const idx = parseInt(el.dataset.idx);
-    if (arc.alinStates[idx] === currentStageIdx) {
+    const idx = parseInt(el.dataset.idx, 10);
+    if (!isNaN(idx) && arc.alinStates[idx] === currentStageIdx) {
       arc.alinStates[idx] = targetStage;
       count++;
     }
   });
+
   if (count > 0) {
+    // Limpiar selección visual y cerrar
+    selected.forEach(el => el.classList.remove('selected'));
     selector.classList.remove('open');
     renderAll();
-    showToast(`${count} alin. → ${targetStage===4?'Finalizado':STAGES[targetStage]}`);
+    showToast(`${count} alin. → ${targetStage === 4 ? 'Finalizado' : STAGES[targetStage]}`);
+  } else {
+    alert('Ninguno de los alineadores seleccionados está en la etapa actual. Probá recargar el selector.');
   }
 }
 
