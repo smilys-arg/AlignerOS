@@ -66,7 +66,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 .filter-btn.active{border-color:var(--accent);color:var(--accent);background:rgba(37,99,235,.06)}
 
 .kanban-wrap{overflow-x:auto;scrollbar-width:none;margin:0 -18px;padding:0 18px 6px}
-.kanban{display:grid;grid-template-columns:repeat(4,minmax(240px,1fr));gap:10px;min-width:980px}
+.kanban{display:grid;grid-template-columns:repeat(5,minmax(200px,1fr));gap:10px;min-width:1200px}
 .kanban-col{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow-sm)}
 .col-header{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;background:var(--surface2)}
 .col-title{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--text)}
@@ -135,6 +135,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 .alin-chip.thermo{background:rgba(124,58,237,.12);color:var(--st);border-color:rgba(124,58,237,.25)}
 .alin-chip.cut{background:rgba(234,88,12,.12);color:var(--sc);border-color:rgba(234,88,12,.25)}
 .alin-chip.polish{background:rgba(8,145,178,.12);color:var(--spo);border-color:rgba(8,145,178,.25)}
+.alin-chip.ship{background:rgba(22,163,74,.12);color:var(--green);border-color:rgba(22,163,74,.25)}
 .alin-chip.pendiente{background:var(--border);color:var(--text3);opacity:.6}
 .alin-chip.done{background:rgba(100,116,139,.1);color:var(--done);border-color:rgba(100,116,139,.2);text-decoration:line-through}
 .alin-chip.selected{outline:2px solid var(--accent);outline-offset:1px;z-index:2;transform:scale(1.1)}
@@ -338,9 +339,9 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 // ===================================================================
 //  AlignerOS · Persistencia LOCAL garantizada (localStorage)
 // ===================================================================
-const STAGES = ['Impresión','Termoformado','Corte','Pulido'];
-const SKEYS = ['print','thermo','cut','polish'];
-const SCOLS = {print:'#2563eb',thermo:'#7c3aed',cut:'#ea580c',polish:'#0891b2'};
+const STAGES = ['Impresión','Termoformado','Corte','Pulido','Envío'];
+const SKEYS = ['print','thermo','cut','polish','ship'];
+const SCOLS = {print:'#2563eb',thermo:'#7c3aed',cut:'#ea580c',polish:'#0891b2',ship:'#16a34a'};
 const LS_KEY = 'aligner_data_v1';
 
 let repCtx = null, editingCaseId = null;
@@ -427,10 +428,10 @@ function renderAll() {
 const render = renderAll;
 
 function countByStage() {
-  const cnt = {0:0,1:0,2:0,3:0};
+  const cnt = {0:0,1:0,2:0,3:0,4:0};
   state.cases.forEach(c => ['sup','inf'].forEach(at => {
     const a = c.arcadas[at]; if(!a) return;
-    a.alinStates.forEach(st => { if(st>=0 && st<=3) cnt[st]++; });
+    a.alinStates.forEach(st => { if(st>=0 && st<=4) cnt[st]++; });
   }));
   return cnt;
 }
@@ -445,12 +446,21 @@ function renderStats() {
     <div class="stat-card"><div class="stat-label">Impresión</div><div class="stat-value" style="color:var(--sp)">${cnt[0]}</div></div>
     <div class="stat-card"><div class="stat-label">Termo.</div><div class="stat-value" style="color:var(--st)">${cnt[1]}</div></div>
     <div class="stat-card"><div class="stat-label">Corte</div><div class="stat-value" style="color:var(--sc)">${cnt[2]}</div></div>
-    <div class="stat-card"><div class="stat-label">Pulido</div><div class="stat-value" style="color:var(--spo)">${cnt[3]}</div></div>`;
+    <div class="stat-card"><div class="stat-label">Pulido</div><div class="stat-value" style="color:var(--spo)">${cnt[3]}</div></div>
+    <div class="stat-card"><div class="stat-label">Envío</div><div class="stat-value" style="color:var(--green)">${cnt[4]}</div></div>`;
+    
+}
+  function isCaseShipped(c) {
+  return ['sup','inf'].every(at => {
+    const arc = c.arcadas[at];
+    if (!arc) return true;
+    return arc.alinStates.every(st => st === 5 || st === -1);
+  });
 }
 function renderAlerts() {
   const a = [];
   state.cases.forEach(c => {
-    if(getPrio(c.delivery)==='urgente') {
+    if(getPrio(c.delivery)==='urgente' && !isCaseShipped(c)) {
       const d = daysUntil(c.delivery);
       a.push({t:'red', m:`⚠ ${c.patient.split(',')[0]} — ${d<=0?'VENCIDO':d+'d'}`});
     }
@@ -495,7 +505,7 @@ function renderKanban() {
           <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
           <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
             <option value="0">Impresión</option><option value="1">Termoformado</option>
-            <option value="2">Corte</option><option value="3">Pulido</option><option value="4">Finalizado</option>
+            <option value="2">Corte</option><option value="3">Pulido</option><option value="4">Envío</option><option value="5">Finalizado</option>
           </select>
           <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="event.stopPropagation(); moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Mover</button>
         </div>
@@ -559,7 +569,7 @@ function completeStage(caseId, arcType, stageIdx) {
   const c = state.cases.find(x=>x.id===caseId); if(!c) return;
   const arc = c.arcadas[arcType]; if(!arc) return;
   if(stageIdx !== null && stageIdx !== undefined) {
-    const next = stageIdx<3 ? stageIdx+1 : 4;
+    const next = stageIdx < 4 ? stageIdx + 1 : 5;  // 4 = Envío, 5 = Finalizado
     let count = 0;
     arc.alinStates.forEach((st,i) => { if(st===stageIdx) { arc.alinStates[i]=next; count++; } });
     if(count>0) { renderAll(); showToast(`${count} uds → ${next===4?'Finalizado ✓':STAGES[next]}`); }
@@ -583,7 +593,7 @@ function renderCases() {
   if (state.doctorFilter !== 'all') list = list.filter(c => c.doctorId === state.doctorFilter);
   const bmap = {urgente:'<span class="case-badge urgente">⚠ URGENTE</span>',proximo:'<span class="case-badge proximo">● PRÓXIMO</span>',ok:'<span class="case-badge ok">✓ OK</span>'};
   const dcol = {urgente:'var(--red)',proximo:'var(--yellow)',ok:'var(--green)'};
-  const clsMap = ['print','thermo','cut','polish'];
+  const clsMap = ['print','thermo','cut','polish','ship'];
   document.getElementById('casesList').innerHTML = list.map(c => {
     const p = getPrio(c.delivery); const d = daysUntil(c.delivery);
     const arcHtml = ['sup','inf'].map(at => {
@@ -603,7 +613,8 @@ function renderCases() {
           <select id="moveTarget-${c.id}-${at}" class="form-input" style="width:auto;padding:4px 8px;font-size:10px">
             <option value="0">Impresión</option><option value="1">Termoformado</option>
             <option value="2">Corte</option><option value="3">Pulido</option>
-            <option value="4">Finalizado</option>
+            <option value="4">Envío</option>
+            <option value="5">Finalizado</option>
           </select>
           <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="moveSelected('${c.id}','${at}')">Mover ${selCount}</button>
           <button class="qbtn" style="color:var(--text3)" onclick="clearSelection()">✕</button>
