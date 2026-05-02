@@ -38,10 +38,6 @@ header{display:flex;align-items:center;justify-content:space-between;padding:0 2
 .tab:hover{color:var(--text);background:var(--surface2)}
 .tab.active{color:var(--accent);background:rgba(37,99,235,.08)}
 .header-right{display:flex;gap:12px;align-items:center;flex-shrink:0}
-.sync-indicator{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text3)}
-.sync-dot{width:6px;height:6px;border-radius:50%;background:var(--green)}
-.sync-dot.offline{background:var(--red)}
-.date-chip{font-size:12px;color:var(--text2);display:none}
 .btn-new{padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);font-family:'Inter',sans-serif;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background .15s;touch-action:manipulation;box-shadow:var(--shadow-sm)}
 .btn-new:hover{background:var(--accent2)}
 
@@ -317,7 +313,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 <div class="toast" id="toast"></div>
 
 <script>
-// ==================== PWA (sin service worker para evitar caché) ====================
+// ==================== PWA (sin service worker) ====================
 (function() {
   const manifest = {
     name: "AlignerOS",
@@ -326,9 +322,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
     display: "standalone",
     background_color: "#f8fafc",
     theme_color: "#2563eb",
-    icons: [
-      { src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cpolygon points='256,32 464,160 464,352 256,480 48,352 48,160' fill='%232563eb'/%3E%3Ctext x='256' y='300' text-anchor='middle' font-family='Inter,sans-serif' font-weight='bold' font-size='140' fill='white'%3EOS%3C/text%3E%3C/svg%3E", sizes: "512x512", type: "image/svg+xml" }
-    ]
+    icons: [{ src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cpolygon points='256,32 464,160 464,352 256,480 48,352 48,160' fill='%232563eb'/%3E%3Ctext x='256' y='300' text-anchor='middle' font-family='Inter,sans-serif' font-weight='bold' font-size='140' fill='white'%3EOS%3C/text%3E%3C/svg%3E", sizes: "512x512", type: "image/svg+xml" }]
   };
   const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
   const manifestURL = URL.createObjectURL(blob);
@@ -336,18 +330,18 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
   link.rel = 'manifest';
   link.href = manifestURL;
   document.head.appendChild(link);
-
-  // Limpiar cualquier service worker viejo que pueda estar cacheando
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
   }
 })();
 
-// ==================== ESTADO ====================
+// ===================================================================
+//  AlignerOS · Persistencia LOCAL garantizada (localStorage)
+// ===================================================================
 const STAGES = ['Impresión','Termoformado','Corte','Pulido'];
 const SKEYS = ['print','thermo','cut','polish'];
 const SCOLS = {print:'#2563eb',thermo:'#7c3aed',cut:'#ea580c',polish:'#0891b2'};
-const LS_KEY = 'alignerOS_lab';
+const LS_KEY = 'aligner_data_v1';
 
 let repCtx = null, editingCaseId = null;
 let selection = { caseId:null, arcType:null, indices:new Set() };
@@ -396,33 +390,32 @@ function defaultState(){
   ]};
 }
 
-const state = {
-  cases: [],
-  stock: [],
-  kFilter: 'all',
-  cFilter: 'all',
-  doctorFilter: 'all'
-};
+const state = { cases: [], stock: [], kFilter: 'all', cFilter: 'all', doctorFilter: 'all' };
 
-function loadState() {
+function loadState(){
   try {
-    const saved = localStorage.getItem(LS_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed.cases && parsed.stock) return parsed;
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      if (data.cases && data.stock) {
+        state.cases = data.cases;
+        state.stock = data.stock;
+        return true;
+      }
     }
   } catch(e) {}
-  return defaultState();
+  const demo = defaultState();
+  state.cases = demo.cases;
+  state.stock = demo.stock;
+  saveState();
+  return false;
 }
 
-function saveState() {
-  localStorage.setItem(LS_KEY, JSON.stringify({ cases: state.cases, stock: state.stock }));
+function saveState(){
+  try {
+    localStorage.setItem(LS_KEY, JSON.stringify({ cases: state.cases, stock: state.stock }));
+  } catch(e) { console.error('Error al guardar', e); }
 }
-
-// Inicializar estado desde localStorage
-const saved = loadState();
-state.cases = saved.cases;
-state.stock = saved.stock;
 
 function renderAll() {
   renderStats();
@@ -430,10 +423,11 @@ function renderAll() {
   renderKanban();
   renderCases();
   renderStock();
-  saveState(); // Guardar automáticamente cada vez que se renderiza
+  saveState();  // <-- Guardado automático en cada cambio
 }
 const render = renderAll;
 
+// ==================== RENDERIZADOS ====================
 function countByStage() {
   const cnt = {0:0,1:0,2:0,3:0};
   state.cases.forEach(c => ['sup','inf'].forEach(at => {
@@ -520,19 +514,16 @@ function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
   const isOpen = selector.classList.contains('open');
   document.querySelectorAll('.kanban-alin-selector.open').forEach(s => s.classList.remove('open'));
   if (isOpen) return;
-
   const c = state.cases.find(x => x.id === caseId);
   if (!c) return;
   const arc = c.arcadas[arcType];
   if (!arc) return;
   const indices = [];
   arc.alinStates.forEach((st, i) => { if (st === stageIdx) indices.push(i); });
-
   const grid = document.getElementById(`ksel-grid-${cardId}`);
   grid.innerHTML = indices.map(i =>
     `<span class="kanban-alin-item" data-idx="${i}" onclick="event.stopPropagation(); this.classList.toggle('selected')">${i}</span>`
   ).join('');
-
   selector.classList.add('open');
 }
 
@@ -540,21 +531,14 @@ function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
   currentStageIdx = parseInt(currentStageIdx, 10);
   const selector = document.getElementById(`ksel-${cardId}`);
   if (!selector) return;
-
   const selected = selector.querySelectorAll('.kanban-alin-item.selected');
-  if (selected.length === 0) {
-    alert('Seleccioná al menos un alineador');
-    return;
-  }
-
+  if (selected.length === 0) { alert('Seleccioná al menos un alineador'); return; }
   const targetStage = parseInt(document.getElementById(`ksel-stage-${cardId}`).value, 10);
   if (isNaN(targetStage)) return;
-
   const c = state.cases.find(x => x.id === caseId);
   if (!c) return;
   const arc = c.arcadas[arcType];
   if (!arc) return;
-
   let count = 0;
   selected.forEach(el => {
     const idx = parseInt(el.dataset.idx, 10);
@@ -563,7 +547,6 @@ function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
       count++;
     }
   });
-
   if (count > 0) {
     selected.forEach(el => el.classList.remove('selected'));
     selector.classList.remove('open');
@@ -650,17 +633,12 @@ function renderCases() {
       ${c.open ? `<div class="case-body"><div class="arcadas-grid">${arcHtml}</div>${c.obs ? `<div class="obs-note">📝 ${c.obs}</div>` : ''}</div>` : ''}
     </div>`;
   }).join('');
-
   const doctorSelect = document.getElementById('doctorFilter');
   const doctors = [...new Set(state.cases.map(c => c.doctorId).filter(Boolean))];
   doctorSelect.innerHTML = '<option value="all">Todos los doctores</option>' + doctors.map(id => `<option value="${id}">${id}</option>`).join('');
   doctorSelect.value = state.doctorFilter;
 }
-
-function filterByDoctor() {
-  state.doctorFilter = document.getElementById('doctorFilter').value;
-  renderCases();
-}
+function filterByDoctor() { state.doctorFilter = document.getElementById('doctorFilter').value; renderCases(); }
 
 function clearSelection() { selection={caseId:null,arcType:null,indices:new Set()}; renderCases(); }
 function toggleAlin(caseId, arcType, idx) {
@@ -801,6 +779,7 @@ function showToast(msg) {
 
 // ==================== INICIAR ====================
 document.getElementById('bn-kanban').classList.add('active');
+loadState();
 renderAll();
 </script>
 </body>
