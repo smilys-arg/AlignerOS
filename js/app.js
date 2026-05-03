@@ -419,14 +419,18 @@ function renderKanban() {
           <button class="qbtn done-btn" onclick="event.stopPropagation(); completeStage('${it.c.id}','${it.at}',${stageIdx})">✓</button>
         </div></div>
         <div class="kanban-alin-selector" id="ksel-${cardId}">
-          <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
-          <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
-            <option value="0">Impresión</option><option value="1">Termoformado</option>
-            <option value="2">Corte/Pulido</option><option value="3">Envío</option>
-            <option value="4">Finalizado</option>
-          </select>
-          <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="event.stopPropagation(); moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Mover</button>
-        </div>
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px">
+    <span style="font-size:10px; color:var(--text3)">Seleccioná alineadores</span>
+    <button onclick="event.stopPropagation(); document.getElementById('ksel-${cardId}').classList.remove('open')" style="background:none; border:none; color:var(--text3); cursor:pointer; font-size:14px">&times;</button>
+  </div>
+  <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
+  <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
+    <option value="0">Impresión</option><option value="1">Termoformado</option>
+    <option value="2">Corte/Pulido</option><option value="3">Envío</option>
+    <option value="4">Finalizado</option>
+  </select>
+  <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="event.stopPropagation(); moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Mover</button>
+</div>
       </div>`;
     }).join('') : `<div class="empty-col"><div class="empty-icon">◌</div>Sin pendientes</div>`;
     return `<div class="kanban-col"><div class="col-header"><div class="col-title"><div class="col-dot" style="background:${color}"></div>${STAGES[stageIdx]}</div><span class="col-count">${cards.length}</span></div><div class="col-body">${body}</div></div>`;
