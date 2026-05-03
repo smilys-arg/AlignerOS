@@ -33,6 +33,7 @@ header{display:flex;align-items:center;justify-content:space-between;padding:0 2
 .btn-undo{padding:8px 12px;background:var(--surface);color:var(--text2);border:1px solid var(--border);border-radius:var(--radius-sm);font-family:'Inter',sans-serif;font-size:12px;cursor:pointer;transition:all .15s;margin-right:auto}
 .btn-undo:hover{border-color:var(--accent);color:var(--accent)}
 .btn-undo:disabled{opacity:.5;pointer-events:none}
+.btn-undo[title*="Cmd"] { margin-right:8px; font-size:16px; }
 
 main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-width:1280px;margin:0 auto}
 
