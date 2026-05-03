@@ -506,14 +506,6 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// Mapeo de palabras clave a stage index
-const voiceStageMap = {
-  'imprimir': 0, 'impresión': 0, 'imprimió': 0, 'imprimí': 0,
-  'termoformar': 1, 'termoformado': 1, 'termoformé': 1, 'termoformó': 1,
-  'cortar': 2, 'corte': 2, 'pulir': 2, 'pulido': 2, 'corté': 2, 'pulí': 2,
-  'enviar': 3, 'envío': 3, 'envié': 3, 'envió': 3,
-  'entregar': 4, 'finalizar': 4, 'finalizado': 4, 'entregué': 4, 'entregó': 4
-};
 
 function extractRanges(text) {
   // Patrón: número (al|a|-|hasta) número o número suelto
