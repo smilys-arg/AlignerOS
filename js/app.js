@@ -442,21 +442,39 @@ function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
   stageIdx = parseInt(stageIdx, 10);
   const selector = document.getElementById(`ksel-${cardId}`);
   if (!selector) return;
-  const isOpen = selector.classList.contains('open');
+  
+  // Si ya está abierto, cerrarlo (alternar)
+  if (selector.classList.contains('open')) {
+    selector.classList.remove('open');
+    return;
+  }
+  
+  // Cerrar cualquier otro selector abierto
   document.querySelectorAll('.kanban-alin-selector.open').forEach(s => s.classList.remove('open'));
-  if (isOpen) return;
+  
   const c = state.cases.find(x => x.id === caseId);
   if (!c) return;
   const arc = c.arcadas[arcType];
   if (!arc) return;
+  
+  // Llenar chips con los alineadores de la etapa actual
   const indices = [];
   arc.alinStates.forEach((st, i) => { if (st === stageIdx) indices.push(i); });
+  
   const grid = document.getElementById(`ksel-grid-${cardId}`);
   grid.innerHTML = indices.map(i =>
     `<span class="kanban-alin-item" data-idx="${i}" onclick="event.stopPropagation(); this.classList.toggle('selected')">${i}</span>`
   ).join('');
+  
   selector.classList.add('open');
 }
+
+// Cerrar selectores del kanban cuando se hace clic fuera
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.kanban-alin-selector') && !e.target.closest('.quick-btns')) {
+    document.querySelectorAll('.kanban-alin-selector.open').forEach(s => s.classList.remove('open'));
+  }
+});
 
 function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
   currentStageIdx = parseInt(currentStageIdx, 10);
