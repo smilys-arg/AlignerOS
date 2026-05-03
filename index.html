@@ -16,7 +16,6 @@
 
 <header>
   <button class="btn-undo" id="btnUndo" disabled onclick="undo()" title="Deshacer (Ctrl+Z)">↩ Deshacer</button>
-  <button class="btn-new btn-mic" onclick="startVoiceCommand()" title="Comando de voz (Ctrl+M)" style="background:var(--accent);margin-right:8px">🎙️ Voz</button>
   <div class="logo">AlignerOS</div>
   <nav class="desktop-nav">
     <button class="tab active" onclick="switchView('kanban',this)">Producción</button>
@@ -29,6 +28,7 @@
       <span class="sync-dot offline" id="syncDot"></span>
       <span id="syncText">Offline</span>
     </div>
+    <button class="btn-mic" id="btnMic" onclick="startVoiceCommand()" title="Comando de voz">🎙️</button>
     <button class="btn-new" onclick="openNewCase()">+ Nuevo caso</button>
   </div>
 </header>
