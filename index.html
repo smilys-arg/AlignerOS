@@ -471,8 +471,8 @@ function isCaseCompletelyFinished(c) {
   });
 }
 
-// ==================== CSV (se mantiene igual, no lo repito por brevedad pero va completo) ====================
-const csvRaw = `ID Paciente,Nombre Paciente,Alineador,Arcada (S/I),# (Step),PRODUCCION`
+// ==================== CSV ====================
+const csvRaw = `ID Paciente,Nombre Paciente,Alineador,Arcada (S/I),# (Step),PRODUCCION
 GE01,Martina Cutrera,GE01S0,S,0,ENTREGADO
 GE01,Martina Cutrera,GE01S1,S,1,ENTREGADO
 GE01,Martina Cutrera,GE01S2,S,2,ENTREGADO
@@ -956,8 +956,77 @@ GM00,Nadia,GM00I8,I,8,TERMOFORMAR
 GM00,Nadia,GM00I9,I,9,TERMOFORMAR`;
 
 const stageMap = { 'IMPRIMIR':0, 'TERMOFORMAR':1, 'PULIR':2, 'LISTO':3, 'ENTREGADO':FINAL_STAGE };
-function parseCSV(csvText) { /* igual que antes */ }
-function buildCasesFromCSV(csvText) { /* igual que antes */ }
+
+function parseCSV(csvText) {
+  const lines = csvText.split('\n').filter(line => line.trim());
+  const headers = lines[0].split(',');
+  const data = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(',');
+    if (cols.length < 6) continue;
+    const row = {
+      idPaciente: cols[0].trim(),
+      nombre: cols[1].trim(),
+      alineador: cols[2].trim(),
+      arcada: cols[3].trim().toUpperCase() === 'S' ? 'sup' : 'inf',
+      step: parseInt(cols[4].trim(), 10),
+      produccion: cols[5].trim().toUpperCase()
+    };
+    if (isNaN(row.step)) continue;
+    data.push(row);
+  }
+  return data;
+}
+
+function buildCasesFromCSV(csvText) {
+  const data = parseCSV(csvText);
+  const casesMap = new Map();
+  data.forEach(row => {
+    const caseId = row.idPaciente || 'SINID';
+    if (!casesMap.has(caseId)) {
+      casesMap.set(caseId, {
+        id: uid(),
+        patient: row.nombre || caseId,
+        doctor: '',
+        doctorId: caseId,
+        delivery: '2026-12-31',
+        obs: '',
+        arcadas: { sup: null, inf: null },
+        open: false,
+        _maxSteps: { sup: -1, inf: -1 }
+      });
+    }
+    const caso = casesMap.get(caseId);
+    const arcType = row.arcada;
+    if (caso._maxSteps[arcType] < row.step) caso._maxSteps[arcType] = row.step;
+  });
+
+  casesMap.forEach(caso => {
+    ['sup', 'inf'].forEach(at => {
+      const max = caso._maxSteps[at];
+      if (max >= 0) {
+        caso.arcadas[at] = { total: max + 1, alinStates: new Array(max + 1).fill(-1) };
+      } else {
+        caso.arcadas[at] = null;
+      }
+    });
+    delete caso._maxSteps;
+  });
+
+  data.forEach(row => {
+    const caseId = row.idPaciente || 'SINID';
+    const caso = casesMap.get(caseId);
+    if (!caso) return;
+    const arc = caso.arcadas[row.arcada];
+    if (!arc) return;
+    const stage = stageMap[row.produccion];
+    if (stage !== undefined && row.step < arc.total) {
+      arc.alinStates[row.step] = stage;
+    }
+  });
+
+  return Array.from(casesMap.values());
+}
 
 // ==================== ESTADO ====================
 const state = {
