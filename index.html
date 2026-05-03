@@ -21,6 +21,7 @@
     <button class="tab active" onclick="switchView('kanban',this)">Producción</button>
     <button class="tab" onclick="switchView('casos',this)">Casos</button>
     <button class="tab" onclick="switchView('stock',this)">Stock</button>
+    <button class="tab" onclick="switchView('tareas',this)">Tareas</button>
   </nav>
   <div class="header-right">
     <button class="activity-btn" onclick="openActivityModal()" title="Registro de actividad">📋<span class="activity-badge" id="activityBadge" style="display:none">0</span></button>
@@ -71,6 +72,13 @@
     </div>
     <div class="stock-grid" id="stockGrid"></div>
   </div>
+
+  <div id="view-tareas" style="display:none">
+  <div class="section-header">
+    <span class="section-title">Lista de trabajo diario</span>
+  </div>
+  <div class="daily-tasks" id="dailyTasks"></div>
+</div>
 </main>
 
 <nav class="bottom-nav">
@@ -78,6 +86,7 @@
     <button class="bnav-item active" id="bn-kanban" onclick="switchView('kanban',this)"><span class="bnav-icon">▦</span><span>Prod.</span></button>
     <button class="bnav-item" id="bn-casos" onclick="switchView('casos',this)"><span class="bnav-icon">⧉</span><span>Casos</span></button>
     <button class="bnav-item" id="bn-stock" onclick="switchView('stock',this)"><span class="bnav-icon">◈</span><span>Stock</span></button>
+    <button class="bnav-item" id="bn-tareas" onclick="switchView('tareas',this)"><span class="bnav-icon">📋</span><span>Tareas</span></button>
   </div>
 </nav>
 <button class="fab" onclick="openNewCase()">+</button>
