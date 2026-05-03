@@ -81,6 +81,28 @@ function isCaseCompletelyFinished(c) {
   });
 }
 
+// ==================== GESTIÓN DE STOCK DE PLANCHAS ====================
+function getPlanchaStock() {
+  let plancha = state.stock.find(s => s.name.toLowerCase().includes('planchas 0.75'));
+  if (!plancha) {
+    plancha = { id: uid(), name: 'Planchas 0.75mm', type: 'Planchas', qty: 100, min: 30, unit: 'láminas', max: 200 };
+    state.stock.push(plancha);
+  }
+  return plancha;
+}
+
+function adjustStockOnStageChange(arc, idx, oldStage, newStage) {
+  // Solo descontar/restaurar al mover a Corte/Pulido (2) o salir de Corte/Pulido
+  if (oldStage === newStage) return;
+  if (newStage === 2 && oldStage !== 2) {
+    const plancha = getPlanchaStock();
+    plancha.qty = Math.max(0, plancha.qty - 1);
+  } else if (oldStage === 2 && newStage !== 2) {
+    const plancha = getPlanchaStock();
+    plancha.qty += 1;
+  }
+}
+
 // ==================== ESTADO ====================
 const state = {
   cases: [], stock: [], lastModified: 0,
@@ -168,10 +190,9 @@ function loadState(){
       }
     }
   } catch(e) {}
-  // Si no hay datos locales o son inválidos, cargar desde CSV
   state.cases = buildCasesFromCSV(csvRaw);
   state.stock = [
-    {id:uid(),name:'Planchas 0.75mm',type:'Planchas',qty:45,min:30,unit:'láminas',max:200},
+    {id:uid(),name:'Planchas 0.75mm',type:'Planchas',qty:100,min:30,unit:'láminas',max:200},
     {id:uid(),name:'Planchas 1.0mm',type:'Planchas',qty:12,min:20,unit:'láminas',max:100},
     {id:uid(),name:'Resina UV',type:'Resina',qty:3,min:2,unit:'kg',max:10},
     {id:uid(),name:'Bolsas',type:'Packaging',qty:180,min:50,unit:'unid',max:500},
@@ -188,9 +209,8 @@ function saveState(){
       writeLock = true;
       const rootRef = db.ref('/');
       rootRef.transaction(currentData => {
-        // Si el remote lastModified es mayor, abortamos para no sobrescribir cambios más nuevos
         if (currentData && currentData.lastModified > state.lastModified) {
-          return; // abort
+          return;
         }
         return { ...data, lastModified: Date.now() };
       }, (error, committed, snapshot) => {
@@ -199,7 +219,6 @@ function saveState(){
           console.error('Transacción fallida:', error);
           showToast('Error de sincronización');
         } else if (!committed) {
-          // Conflicto: recargar datos remotos
           db.ref('/').once('value').then(snap => {
             const remote = snap.val();
             if (remote && remote.cases && remote.stock) {
@@ -221,7 +240,7 @@ function saveState(){
 function setupFirebaseListener() {
   if (!db) return;
   db.ref('/').on('value', snap => {
-    if (writeLock) return; // no sobrescribir mientras escribimos
+    if (writeLock) return;
     const remote = snap.val();
     if (remote && remote.cases && remote.stock && (!state.lastModified || remote.lastModified >= state.lastModified)) {
       state.cases = remote.cases;
@@ -263,327 +282,25 @@ function updateSyncStatus(online) {
   else { dot.className = 'sync-dot offline'; txt.textContent = 'Offline'; }
 }
 
-// ==================== COMANDOS POR VOZ (Completo) ====================
-let recognition = null;
-let pendingVoiceActions = null;
-let voiceListening = false;
-
-function initSpeechRecognition() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    alert('Tu navegador no soporta reconocimiento de voz. Probá con Chrome o Safari.');
-    return;
-  }
-  recognition = new SpeechRecognition();
-  recognition.lang = 'es-ES';
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 3;
-
-  recognition.onresult = (event) => {
-    let bestTranscript = '';
-    for (let i = 0; i < event.results[0].length; i++) {
-      const alt = event.results[0][i].transcript.trim();
-      if (alt.split(' ').length > bestTranscript.split(' ').length) {
-        bestTranscript = alt;
-      }
-    }
-    if (!bestTranscript) bestTranscript = event.results[0][0].transcript.trim();
-    if (bestTranscript) {
-      processVoiceCommand(bestTranscript.toLowerCase());
-    }
-    stopVoiceListening();
-  };
-
-  recognition.onerror = (event) => {
-    if (event.error === 'not-allowed') {
-      showToast('Permití el micrófono en Ajustes > Safari > Micrófono');
-    } else {
-      showToast('Error de voz: ' + event.error);
-    }
-    stopVoiceListening();
-  };
-
-  recognition.onend = () => {
-    stopVoiceListening();
-  };
-}
-
-function startVoiceCommand() {
-  if (!recognition) initSpeechRecognition();
-  if (!recognition) return;
-
-  if (voiceListening) {
-    stopVoiceListening();
-    return;
-  }
-
-  try {
-    recognition.start();
-    voiceListening = true;
-    updateMicButton(true);
-    showToast('🎤 Te escucho... (hablá claro)');
-  } catch (e) {
-    showToast('Error al activar micrófono');
-    updateMicButton(false);
-    voiceListening = false;
-  }
-}
-
-function stopVoiceListening() {
-  if (recognition && voiceListening) {
-    try { recognition.stop(); } catch(e) {}
-    voiceListening = false;
-    updateMicButton(false);
-  }
-}
-
-function updateMicButton(active) {
-  const btn = document.querySelector('.btn-mic');
-  if (btn) {
-    btn.style.background = active ? 'var(--red)' : 'var(--accent)';
-    btn.textContent = active ? '🎤' : '🎙️';
-  }
-}
-
-// Vocabulario de etapas
-const voiceStageMap = {
-  'imprimí':0, 'imprimir':0, 'impresión':0, 'impresion':0, 'imprimiendo':0,
-  'termoformé':1, 'termoformar':1, 'termoformado':1, 'termoformando':1, 'termoforme':1,
-  'corté':2, 'cortar':2, 'corte':2, 'cortando':2,
-  'pulí':2, 'pulir':2, 'pulido':2, 'puliendo':2,
-  'corté y pulí':2, 'corte y pulido':2,
-  'envíe':3, 'enviar':3, 'envío':3, 'envio':3, 'enviado':3, 'envié':3,
-  'lo mandé':3, 'los mandé':3, 'mandar':3, 'mandé':3,
-  'entregué':4, 'entregar':4, 'entregado':4, 'entregue':4, 'finalicé':4,
-  'finalizar':4, 'finalizado':4, 'finalice':4, 'listo':4, 'terminé':4
-};
-
-// Palabras numéricas (soporta hasta 99)
-const unidades = {
-  'cero':0, 'uno':1, 'una':1, 'dos':2, 'tres':3, 'cuatro':4,
-  'cinco':5, 'seis':6, 'siete':7, 'ocho':8, 'nueve':9
-};
-const especiales = {
-  'diez':10, 'once':11, 'doce':12, 'trece':13, 'catorce':14,
-  'quince':15, 'dieciséis':16, 'diecisiete':17, 'dieciocho':18,
-  'diecinueve':19, 'veinte':20, 'veintiuno':21, 'veintidós':22,
-  'veintitrés':23, 'veinticuatro':24, 'veinticinco':25, 'veintiséis':26,
-  'veintisiete':27, 'veintiocho':28, 'veintinueve':29
-};
-const decenas = {
-  'treinta':30, 'cuarenta':40, 'cincuenta':50, 'sesenta':60,
-  'setenta':70, 'ochenta':80, 'noventa':90
-};
-
-function normalizarNumeroPalabra(palabra) {
-  palabra = palabra.toLowerCase().trim();
-  if (unidades[palabra] !== undefined) return unidades[palabra];
-  if (especiales[palabra] !== undefined) return especiales[palabra];
-  if (decenas[palabra] !== undefined) return decenas[palabra];
-  return null;
-}
-
-function normalizeNumbers(text) {
-  // Unir "decena y unidad": treinta y uno -> 31
-  let normalized = text.replace(
-    /\b(treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa)\s+y\s+(uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)\b/gi,
-    (match, decena, unidad) => {
-      const dec = decenas[decena.toLowerCase()];
-      const uni = unidades[unidad.toLowerCase()];
-      return (dec + uni).toString();
-    }
-  );
-
-  // Reemplazar especiales
-  for (const [palabra, num] of Object.entries(especiales)) {
-    normalized = normalized.replace(new RegExp('\\b' + palabra + '\\b', 'gi'), num.toString());
-  }
-  // Reemplazar unidades sueltas
-  for (const [palabra, num] of Object.entries(unidades)) {
-    normalized = normalized.replace(new RegExp('\\b' + palabra + '\\b', 'gi'), num.toString());
-  }
-  // Reemplazar decenas (pero no si van seguidas de "y")
-  for (const [palabra, num] of Object.entries(decenas)) {
-    normalized = normalized.replace(new RegExp('\\b' + palabra + '(?!\\s+y)', 'gi'), num.toString());
-  }
-
-  return normalized;
-}
-
-function extractNumbers(text) {
-  const normalized = normalizeNumbers(text);
-  const numbers = [];
-
-  // Rangos explícitos: "del 3 al 7" -> 3,4,5,6,7
-  const rangeRegex = /(?:del\s+)?(\d+)\s*(?:al?|a|hasta|-)\s*(\d+)/g;
-  let match;
-  while ((match = rangeRegex.exec(normalized)) !== null) {
-    const start = parseInt(match[1]);
-    const end = parseInt(match[2]);
-    for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
-      numbers.push(i);
-    }
-  }
-
-  // Números sueltos
-  const allDigits = normalized.match(/\d+/g);
-  if (allDigits) {
-    allDigits.forEach(numStr => {
-      const num = parseInt(numStr);
-      if (!numbers.includes(num)) {
-        numbers.push(num);
-      }
-    });
-  }
-
-  return [...new Set(numbers)].sort((a,b)=>a-b);
-}
-
-function extractNumbersNearArc(text, arcType) {
-  const normalized = normalizeNumbers(text);
-  const arcWords = arcType === 'sup' 
-    ? ['superior', 'superiores', 'arriba', 'sup']
-    : ['inferior', 'inferiores', 'abajo', 'inf'];
-  
-  const arcPositions = [];
-  for (const word of arcWords) {
-    let idx = normalized.indexOf(word);
-    while (idx !== -1) {
-      arcPositions.push({ index: idx, word });
-      idx = normalized.indexOf(word, idx + 1);
-    }
-  }
-  
-  if (arcPositions.length === 0) return [];
-  
-  const numbers = [];
-  const numRegex = /\d+/g;
-  let numMatch;
-  while ((numMatch = numRegex.exec(normalized)) !== null) {
-    const num = parseInt(numMatch[0]);
-    const numPos = numMatch.index;
-    const isNear = arcPositions.some(arc => 
-      Math.abs(arc.index - numPos) < 60
-    );
-    if (isNear && !numbers.includes(num)) {
-      numbers.push(num);
-    }
-  }
-  return numbers.sort((a,b)=>a-b);
-}
-
-function findPatientMention(text) {
-  const words = text.toLowerCase().split(/[\s,;.]+/);
-  for (const word of words) {
-    if (word.length < 2) continue;
-    const match = state.cases.find(c => 
-      c.patient.toLowerCase().includes(word) ||
-      (c.doctorId && c.doctorId.toLowerCase().includes(word))
-    );
-    if (match) return match;
-  }
-  return null;
-}
-
-function processVoiceCommand(transcript) {
-  console.log('Transcripción:', transcript);
-
-  let targetStage = -1;
-  for (const [word, stage] of Object.entries(voiceStageMap)) {
-    if (transcript.includes(word)) {
-      targetStage = stage;
-      break;
-    }
-  }
-  if (targetStage === -1) {
-    showToast('No entendí la etapa. Decí: "imprimí", "termoformé", "corté/pulí", "envié" o "entregué".');
-    return;
-  }
-
-  const matchedCase = findPatientMention(transcript);
-  if (!matchedCase) {
-    showToast('No reconocí el paciente. Mencioná el nombre como está en la lista.');
-    return;
-  }
-
-  const supNumbers = extractNumbersNearArc(transcript, 'sup');
-  const infNumbers = extractNumbersNearArc(transcript, 'inf');
-
-  // Si no se detectó arcada, tomar todos los números y aplicar a ambas arcadas existentes
-  if (supNumbers.length === 0 && infNumbers.length === 0) {
-    const allNumbers = extractNumbers(transcript);
-    if (allNumbers.length === 0) {
-      showToast('No escuché números. Decí "del 3 al 7" o "1, 2 y 3".');
-      return;
-    }
-    if (matchedCase.arcadas.sup) supNumbers.push(...allNumbers);
-    if (matchedCase.arcadas.inf) infNumbers.push(...allNumbers);
-  }
-
-  pendingVoiceActions = { targetStage, matchedCase, actions: [] };
-  if (supNumbers.length > 0 && matchedCase.arcadas.sup) {
-    pendingVoiceActions.actions.push({ arcType: 'sup', numbers: [...new Set(supNumbers)].sort((a,b)=>a-b) });
-  }
-  if (infNumbers.length > 0 && matchedCase.arcadas.inf) {
-    pendingVoiceActions.actions.push({ arcType: 'inf', numbers: [...new Set(infNumbers)].sort((a,b)=>a-b) });
-  }
-
-  if (pendingVoiceActions.actions.length === 0) {
-    showToast('No hay alineadores para mover en esa arcada.');
-    return;
-  }
-
-  renderVoiceConfirmation(matchedCase.patient, targetStage);
-}
-
-function renderVoiceConfirmation(patientName, targetStage) {
-  if (!pendingVoiceActions) return;
-  const content = document.getElementById('voiceConfirmContent');
-  const stageNames = STAGES.concat(['Finalizado']);
-  let html = `<p>Paciente: <strong>${pendingVoiceActions.matchedCase.patient}</strong></p>`;
-  html += `<p>Etapa: <strong>${stageNames[targetStage]}</strong></p>`;
-  html += '<p>Alineadores:</p><ul>';
-  pendingVoiceActions.actions.forEach(a => {
-    const arcName = a.arcType === 'sup' ? 'Superior' : 'Inferior';
-    html += `<li>${arcName}: ${a.numbers.join(', ')}</li>`;
-  });
-  html += '</ul>';
-  content.innerHTML = html;
-  openModal('voiceConfirmModal');
-}
-
-function executeVoiceCommand() {
-  if (!pendingVoiceActions) return;
-  const { matchedCase, actions, targetStage } = pendingVoiceActions;
-  let movedCount = 0;
-  actions.forEach(action => {
-    const arc = matchedCase.arcadas[action.arcType];
-    if (!arc) return;
-    action.numbers.forEach(i => {
-      if (i >= 0 && i < arc.total) {
-        arc.alinStates[i] = targetStage;
-        movedCount++;
-      }
+// ==================== TIEMPO ESTIMADO ====================
+function calculateEstimatedTime() {
+  const timePerStage = [50/7, 5, 10, 0]; // minutos por alineador: Impr, Termo, Corte/Pul, Envío
+  let totalMin = 0;
+  state.cases.forEach(c => {
+    ['sup','inf'].forEach(at => {
+      const arc = c.arcadas[at];
+      if (!arc) return;
+      arc.alinStates.forEach(st => {
+        if (st >= 0 && st < FINAL_STAGE) {
+          totalMin += timePerStage[st] || 0;
+        }
+      });
     });
   });
-  if (movedCount > 0) {
-    addActivity(`🎤 Voz: ${matchedCase.patient} - ${movedCount} alin. → ${STAGES[targetStage] || 'Finalizado'}`);
-    renderAll();
-    showToast(`${movedCount} alin. movidos por voz ✓`);
-  } else {
-    showToast('No se pudo mover ningún alineador. Verificá los números.');
-  }
-  closeModal('voiceConfirmModal');
-  pendingVoiceActions = null;
+  const hours = Math.floor(totalMin / 60);
+  const mins = Math.round(totalMin % 60);
+  return { totalMin, hours, mins };
 }
-
-// Atajo de teclado Ctrl+M
-document.addEventListener('keydown', e => {
-  if (e.ctrlKey && e.key === 'm') {
-    e.preventDefault();
-    startVoiceCommand();
-  }
-});
 
 // ==================== RENDERIZADOS ====================
 function renderAll() {
@@ -617,12 +334,18 @@ function renderProgressBar() {
     });
   });
   const pct = totalAlin ? Math.round((finishedAlin / totalAlin) * 100) : 0;
+  const time = calculateEstimatedTime();
+  let timeStr = '';
+  if (time.hours > 0) timeStr += `${time.hours}h `;
+  timeStr += `${time.mins}min`;
+
   document.getElementById('progressBarContainer').innerHTML = `
     <div class="progress-bar-label">
       <span>Progreso general</span>
       <span>${finishedAlin} / ${totalAlin} alineadores (${pct}%)</span>
     </div>
     <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
+    <div class="time-estimate">⏱ Tiempo estimado de trabajo: <strong>${timeStr}</strong></div>
   `;
 }
 
@@ -741,7 +464,6 @@ function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
   if (!selector) return;
   const selected = selector.querySelectorAll('.kanban-alin-item.selected');
   if (selected.length === 0) { alert('Seleccioná al menos un alineador'); return; }
-  // Sin confirmación: mueve directamente
   const targetStage = parseInt(document.getElementById(`ksel-stage-${cardId}`).value, 10);
   if (isNaN(targetStage)) return;
   const c = state.cases.find(x => x.id === caseId);
@@ -753,7 +475,9 @@ function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
   selected.forEach(el => {
     const idx = parseInt(el.dataset.idx, 10);
     if (!isNaN(idx) && arc.alinStates[idx] === currentStageIdx) {
+      const oldStage = arc.alinStates[idx];
       arc.alinStates[idx] = targetStage;
+      adjustStockOnStageChange(arc, idx, oldStage, targetStage);
       count++;
     }
   });
@@ -775,11 +499,17 @@ function completeStage(caseId, arcType, stageIdx) {
     const next = stageIdx < 3 ? stageIdx + 1 : FINAL_STAGE;
     const indicesToMove = [];
     arc.alinStates.forEach((st,i) => { if(st===stageIdx) indicesToMove.push(i); });
-    // Se mantiene la confirmación solo para la acción de completar etapa
     if (!confirm(`¿Mover ${indicesToMove.length} alineadores a ${next===FINAL_STAGE?'Finalizado':STAGES[next]}?`)) return;
     pushUndo();
     let count = 0;
-    arc.alinStates.forEach((st,i) => { if(st===stageIdx) { arc.alinStates[i]=next; count++; } });
+    arc.alinStates.forEach((st,i) => {
+      if(st===stageIdx) {
+        const oldStage = arc.alinStates[i];
+        arc.alinStates[i] = next;
+        adjustStockOnStageChange(arc, i, oldStage, next);
+        count++;
+      }
+    });
     if(count>0) {
       addActivity(`✓ ${c.patient}: ${count} uds → ${next===FINAL_STAGE?'Finalizado':STAGES[next]}`);
       renderAll();
@@ -790,8 +520,9 @@ function completeStage(caseId, arcType, stageIdx) {
     if (!confirm(`¿Avanzar todos los alineadores posibles de ${c.patient}?`)) return;
     pushUndo();
     arc.alinStates.forEach((st,i) => {
-      if(st>=0 && st<3) { arc.alinStates[i]=st+1; count++; }
-      else if(st===3) { arc.alinStates[i]=FINAL_STAGE; count++; }
+      const old = st;
+      if(st>=0 && st<3) { arc.alinStates[i]=st+1; adjustStockOnStageChange(arc,i,old,st+1); count++; }
+      else if(st===3) { arc.alinStates[i]=FINAL_STAGE; adjustStockOnStageChange(arc,i,old,FINAL_STAGE); count++; }
     });
     if(count>0) { addActivity(`✓ ${c.patient}: ${count} alineadores avanzados`); renderAll(); showToast(`${count} alineadores avanzados`); }
     else showToast('Nada para avanzar');
@@ -880,7 +611,11 @@ function moveSelected(caseId, arcType) {
   const c = state.cases.find(x=>x.id===caseId); if(!c) return;
   const arc = c.arcadas[arcType]; if(!arc) return;
   pushUndo();
-  selection.indices.forEach(i => { arc.alinStates[i] = target; });
+  selection.indices.forEach(i => {
+    const oldStage = arc.alinStates[i];
+    arc.alinStates[i] = target;
+    adjustStockOnStageChange(arc, i, oldStage, target);
+  });
   clearSelection();
   addActivity(`✏️ Mover ${selection.indices.size} alin. de ${c.patient}`);
   renderAll();
@@ -1015,8 +750,20 @@ function submitStock() {
   renderAll();
   showToast(editingStockId ? 'Material actualizado ✓' : 'Material agregado ✓');
 }
-function adjStock(id, delta) { pushUndo(); const s = state.stock.find(x=>x.id===id); if(s) { s.qty = Math.max(0, s.qty+delta); addActivity(`🔢 Stock: ${s.name} ${delta>=0?'+'+delta:delta}`); renderAll(); } }
-function deleteStock(id) { if(confirm('Eliminar?')) { pushUndo(); const s = state.stock.find(x=>x.id===id); state.stock = state.stock.filter(s=>s.id!==id); addActivity(`🗑 Material eliminado: ${s? s.name : id}`); renderAll(); } }
+function adjStock(id, delta) {
+  pushUndo();
+  const s = state.stock.find(x=>x.id===id);
+  if(s) { s.qty = Math.max(0, s.qty+delta); addActivity(`🔢 Stock: ${s.name} ${delta>=0?'+'+delta:delta}`); renderAll(); }
+}
+function deleteStock(id) {
+  if(confirm('Eliminar?')) {
+    pushUndo();
+    const s = state.stock.find(x=>x.id===id);
+    state.stock = state.stock.filter(s=>s.id!==id);
+    addActivity(`🗑 Material eliminado: ${s? s.name : id}`);
+    renderAll();
+  }
+}
 function openReponer(id) {
   repCtx = id;
   const s = state.stock.find(x=>x.id===id); if(!s) return;
@@ -1033,11 +780,396 @@ function confirmReponer() {
   if(s) { s.qty += n; addActivity(`📦 Reponer: ${s.name} +${n} ${s.unit}`); closeModal('reponerModal'); renderAll(); showToast(`+${n} ${s.unit}`); }
 }
 
+// ==================== TAREAS DIARIAS ====================
+function renderDailyTasks() {
+  const tasks = {};
+  const prioOrder = { urgente: 0, proximo: 1, ok: 2 };
+  
+  state.cases.forEach(c => {
+    ['sup','inf'].forEach(at => {
+      const arc = c.arcadas[at];
+      if (!arc) return;
+      const indices = [];
+      arc.alinStates.forEach((st, i) => {
+        if (st >= 0 && st < FINAL_STAGE) indices.push(i);
+      });
+      if (indices.length === 0) return;
+      const stages = {};
+      indices.forEach(i => {
+        const st = arc.alinStates[i];
+        if (!stages[st]) stages[st] = [];
+        stages[st].push(i);
+      });
+      for (const [st, nums] of Object.entries(stages)) {
+        const stageIdx = parseInt(st);
+        if (!tasks[stageIdx]) tasks[stageIdx] = [];
+        tasks[stageIdx].push({
+          patient: c.patient,
+          doctorId: c.doctorId,
+          arcType: at,
+          numbers: nums,
+          prio: getPrio(c.delivery),
+          delivery: c.delivery
+        });
+      }
+    });
+  });
+
+  let html = '';
+  const stageColors = ['#2563eb','#7c3aed','#ea580c','#16a34a'];
+  
+  for (let si = 0; si < SKEYS.length; si++) {
+    const list = tasks[si] || [];
+    list.sort((a,b) => prioOrder[a.prio] - prioOrder[b.prio]);
+    const totalAlin = list.reduce((sum, t) => sum + t.numbers.length, 0);
+    html += `<div class="task-stage-group">
+      <div class="task-stage-header" style="border-left:4px solid ${stageColors[si]}">
+        ${STAGES[si]} <span style="margin-left:auto;font-size:12px;color:var(--text2)">${totalAlin} alin.</span>
+      </div>`;
+    if (list.length === 0) {
+      html += '<div class="task-item"><span style="color:var(--text3)">Sin pendientes</span></div>';
+    } else {
+      list.forEach(t => {
+        const rangeStr = formatRanges(t.numbers);
+        const badgeClass = t.prio === 'urgente' ? 'urgent' : (t.prio === 'proximo' ? 'warning' : '');
+        const arcLabel = t.arcType === 'sup' ? '▲' : '▼';
+        html += `<div class="task-item">
+          <span class="task-patient">${arcLabel} ${t.patient.split(',')[0]}</span>
+          <span class="task-range">${rangeStr}</span>
+          <span class="task-count">${t.numbers.length} uds</span>
+          ${badgeClass ? `<span class="task-badge ${badgeClass}">${t.prio.toUpperCase()}</span>` : ''}
+        </div>`;
+      });
+    }
+    html += '</div>';
+  }
+  
+  document.getElementById('dailyTasks').innerHTML = html;
+}
+
+// ==================== COMANDOS POR VOZ (con ajuste de stock) ====================
+let recognition = null;
+let pendingVoiceActions = null;
+let voiceListening = false;
+
+function initSpeechRecognition() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    alert('Tu navegador no soporta reconocimiento de voz. Probá con Chrome o Safari.');
+    return;
+  }
+  recognition = new SpeechRecognition();
+  recognition.lang = 'es-ES';
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 3;
+
+  recognition.onresult = (event) => {
+    let bestTranscript = '';
+    for (let i = 0; i < event.results[0].length; i++) {
+      const alt = event.results[0][i].transcript.trim();
+      if (alt.split(' ').length > bestTranscript.split(' ').length) {
+        bestTranscript = alt;
+      }
+    }
+    if (!bestTranscript) bestTranscript = event.results[0][0].transcript.trim();
+    if (bestTranscript) {
+      processVoiceCommand(bestTranscript.toLowerCase());
+    }
+    stopVoiceListening();
+  };
+
+  recognition.onerror = (event) => {
+    if (event.error === 'not-allowed') {
+      showToast('Permití el micrófono en Ajustes > Safari > Micrófono');
+    } else {
+      showToast('Error de voz: ' + event.error);
+    }
+    stopVoiceListening();
+  };
+
+  recognition.onend = () => {
+    stopVoiceListening();
+  };
+}
+
+function startVoiceCommand() {
+  if (!recognition) initSpeechRecognition();
+  if (!recognition) return;
+
+  if (voiceListening) {
+    stopVoiceListening();
+    return;
+  }
+
+  try {
+    recognition.start();
+    voiceListening = true;
+    updateMicButton(true);
+    showToast('🎤 Te escucho... (hablá claro)');
+  } catch (e) {
+    showToast('Error al activar micrófono');
+    updateMicButton(false);
+    voiceListening = false;
+  }
+}
+
+function stopVoiceListening() {
+  if (recognition && voiceListening) {
+    try { recognition.stop(); } catch(e) {}
+    voiceListening = false;
+    updateMicButton(false);
+  }
+}
+
+function updateMicButton(active) {
+  const btn = document.querySelector('.btn-mic');
+  if (btn) {
+    btn.style.background = active ? 'var(--red)' : 'var(--accent)';
+    btn.textContent = active ? '🎤' : '🎙️';
+  }
+}
+
+// Vocabulario de etapas
+const voiceStageMap = {
+  'imprimí':0, 'imprimir':0, 'impresión':0, 'impresion':0, 'imprimiendo':0,
+  'termoformé':1, 'termoformar':1, 'termoformado':1, 'termoformando':1, 'termoforme':1,
+  'corté':2, 'cortar':2, 'corte':2, 'cortando':2,
+  'pulí':2, 'pulir':2, 'pulido':2, 'puliendo':2,
+  'corté y pulí':2, 'corte y pulido':2,
+  'envíe':3, 'enviar':3, 'envío':3, 'envio':3, 'enviado':3, 'envié':3,
+  'lo mandé':3, 'los mandé':3, 'mandar':3, 'mandé':3,
+  'entregué':4, 'entregar':4, 'entregado':4, 'entregue':4, 'finalicé':4,
+  'finalizar':4, 'finalizado':4, 'finalice':4, 'listo':4, 'terminé':4
+};
+
+// Palabras numéricas (hasta 99)
+const unidadesVoz = {
+  'cero':0, 'uno':1, 'una':1, 'dos':2, 'tres':3, 'cuatro':4,
+  'cinco':5, 'seis':6, 'siete':7, 'ocho':8, 'nueve':9
+};
+const especialesVoz = {
+  'diez':10, 'once':11, 'doce':12, 'trece':13, 'catorce':14,
+  'quince':15, 'dieciséis':16, 'diecisiete':17, 'dieciocho':18,
+  'diecinueve':19, 'veinte':20, 'veintiuno':21, 'veintidós':22,
+  'veintitrés':23, 'veinticuatro':24, 'veinticinco':25, 'veintiséis':26,
+  'veintisiete':27, 'veintiocho':28, 'veintinueve':29
+};
+const decenasVoz = {
+  'treinta':30, 'cuarenta':40, 'cincuenta':50, 'sesenta':60,
+  'setenta':70, 'ochenta':80, 'noventa':90
+};
+
+function normalizarNumeroPalabra(palabra) {
+  palabra = palabra.toLowerCase().trim();
+  if (unidadesVoz[palabra] !== undefined) return unidadesVoz[palabra];
+  if (especialesVoz[palabra] !== undefined) return especialesVoz[palabra];
+  if (decenasVoz[palabra] !== undefined) return decenasVoz[palabra];
+  return null;
+}
+
+function normalizeNumbers(text) {
+  let normalized = text.replace(
+    /\b(treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa)\s+y\s+(uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)\b/gi,
+    (match, decena, unidad) => {
+      const dec = decenasVoz[decena.toLowerCase()];
+      const uni = unidadesVoz[unidad.toLowerCase()];
+      return (dec + uni).toString();
+    }
+  );
+
+  for (const [palabra, num] of Object.entries(especialesVoz)) {
+    normalized = normalized.replace(new RegExp('\\b' + palabra + '\\b', 'gi'), num.toString());
+  }
+  for (const [palabra, num] of Object.entries(unidadesVoz)) {
+    normalized = normalized.replace(new RegExp('\\b' + palabra + '\\b', 'gi'), num.toString());
+  }
+  for (const [palabra, num] of Object.entries(decenasVoz)) {
+    normalized = normalized.replace(new RegExp('\\b' + palabra + '(?!\\s+y)', 'gi'), num.toString());
+  }
+
+  return normalized;
+}
+
+function extractNumbers(text) {
+  const normalized = normalizeNumbers(text);
+  const numbers = [];
+
+  const rangeRegex = /(?:del\s+)?(\d+)\s*(?:al?|a|hasta|-)\s*(\d+)/g;
+  let match;
+  while ((match = rangeRegex.exec(normalized)) !== null) {
+    const start = parseInt(match[1]);
+    const end = parseInt(match[2]);
+    for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
+      numbers.push(i);
+    }
+  }
+
+  const allDigits = normalized.match(/\d+/g);
+  if (allDigits) {
+    allDigits.forEach(numStr => {
+      const num = parseInt(numStr);
+      if (!numbers.includes(num)) {
+        numbers.push(num);
+      }
+    });
+  }
+
+  return [...new Set(numbers)].sort((a,b)=>a-b);
+}
+
+function extractNumbersNearArc(text, arcType) {
+  const normalized = normalizeNumbers(text);
+  const arcWords = arcType === 'sup' 
+    ? ['superior', 'superiores', 'arriba', 'sup']
+    : ['inferior', 'inferiores', 'abajo', 'inf'];
+  
+  const arcPositions = [];
+  for (const word of arcWords) {
+    let idx = normalized.indexOf(word);
+    while (idx !== -1) {
+      arcPositions.push({ index: idx, word });
+      idx = normalized.indexOf(word, idx + 1);
+    }
+  }
+  
+  if (arcPositions.length === 0) return [];
+  
+  const numbers = [];
+  const numRegex = /\d+/g;
+  let numMatch;
+  while ((numMatch = numRegex.exec(normalized)) !== null) {
+    const num = parseInt(numMatch[0]);
+    const numPos = numMatch.index;
+    const isNear = arcPositions.some(arc => 
+      Math.abs(arc.index - numPos) < 60
+    );
+    if (isNear && !numbers.includes(num)) {
+      numbers.push(num);
+    }
+  }
+  return numbers.sort((a,b)=>a-b);
+}
+
+function findPatientMention(text) {
+  const words = text.toLowerCase().split(/[\s,;.]+/);
+  for (const word of words) {
+    if (word.length < 2) continue;
+    const match = state.cases.find(c => 
+      c.patient.toLowerCase().includes(word) ||
+      (c.doctorId && c.doctorId.toLowerCase().includes(word))
+    );
+    if (match) return match;
+  }
+  return null;
+}
+
+function processVoiceCommand(transcript) {
+  console.log('Transcripción:', transcript);
+
+  let targetStage = -1;
+  for (const [word, stage] of Object.entries(voiceStageMap)) {
+    if (transcript.includes(word)) {
+      targetStage = stage;
+      break;
+    }
+  }
+  if (targetStage === -1) {
+    showToast('No entendí la etapa. Decí: "imprimí", "termoformé", "corté/pulí", "envié" o "entregué".');
+    return;
+  }
+
+  const matchedCase = findPatientMention(transcript);
+  if (!matchedCase) {
+    showToast('No reconocí el paciente. Mencioná el nombre como está en la lista.');
+    return;
+  }
+
+  const supNumbers = extractNumbersNearArc(transcript, 'sup');
+  const infNumbers = extractNumbersNearArc(transcript, 'inf');
+
+  if (supNumbers.length === 0 && infNumbers.length === 0) {
+    const allNumbers = extractNumbers(transcript);
+    if (allNumbers.length === 0) {
+      showToast('No escuché números. Decí "del 3 al 7" o "1, 2 y 3".');
+      return;
+    }
+    if (matchedCase.arcadas.sup) supNumbers.push(...allNumbers);
+    if (matchedCase.arcadas.inf) infNumbers.push(...allNumbers);
+  }
+
+  pendingVoiceActions = { targetStage, matchedCase, actions: [] };
+  if (supNumbers.length > 0 && matchedCase.arcadas.sup) {
+    pendingVoiceActions.actions.push({ arcType: 'sup', numbers: [...new Set(supNumbers)].sort((a,b)=>a-b) });
+  }
+  if (infNumbers.length > 0 && matchedCase.arcadas.inf) {
+    pendingVoiceActions.actions.push({ arcType: 'inf', numbers: [...new Set(infNumbers)].sort((a,b)=>a-b) });
+  }
+
+  if (pendingVoiceActions.actions.length === 0) {
+    showToast('No hay alineadores para mover en esa arcada.');
+    return;
+  }
+
+  renderVoiceConfirmation(matchedCase.patient, targetStage);
+}
+
+function renderVoiceConfirmation(patientName, targetStage) {
+  if (!pendingVoiceActions) return;
+  const content = document.getElementById('voiceConfirmContent');
+  const stageNames = STAGES.concat(['Finalizado']);
+  let html = `<p>Paciente: <strong>${pendingVoiceActions.matchedCase.patient}</strong></p>`;
+  html += `<p>Etapa: <strong>${stageNames[targetStage]}</strong></p>`;
+  html += '<p>Alineadores:</p><ul>';
+  pendingVoiceActions.actions.forEach(a => {
+    const arcName = a.arcType === 'sup' ? 'Superior' : 'Inferior';
+    html += `<li>${arcName}: ${a.numbers.join(', ')}</li>`;
+  });
+  html += '</ul>';
+  content.innerHTML = html;
+  openModal('voiceConfirmModal');
+}
+
+function executeVoiceCommand() {
+  if (!pendingVoiceActions) return;
+  const { matchedCase, actions, targetStage } = pendingVoiceActions;
+  let movedCount = 0;
+  actions.forEach(action => {
+    const arc = matchedCase.arcadas[action.arcType];
+    if (!arc) return;
+    action.numbers.forEach(i => {
+      if (i >= 0 && i < arc.total) {
+        const oldStage = arc.alinStates[i];
+        arc.alinStates[i] = targetStage;
+        adjustStockOnStageChange(arc, i, oldStage, targetStage);
+        movedCount++;
+      }
+    });
+  });
+  if (movedCount > 0) {
+    addActivity(`🎤 Voz: ${matchedCase.patient} - ${movedCount} alin. → ${STAGES[targetStage] || 'Finalizado'}`);
+    renderAll();
+    showToast(`${movedCount} alin. movidos por voz ✓`);
+  } else {
+    showToast('No se pudo mover ningún alineador. Verificá los números.');
+  }
+  closeModal('voiceConfirmModal');
+  pendingVoiceActions = null;
+}
+
+// Atajo de teclado Ctrl+M
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'm') {
+    e.preventDefault();
+    startVoiceCommand();
+  }
+});
+
 // ==================== NAVEGACIÓN Y MODALES ====================
 function switchView(v, el) {
   document.querySelectorAll('.desktop-nav .tab, .bnav-item').forEach(b => b.classList.remove('active'));
   if(el) el.classList.add('active');
-  ['kanban','casos','stock'].forEach(x => document.getElementById('view-'+x).style.display = x===v ? '' : 'none');
+  ['kanban','casos','stock','tareas'].forEach(x => document.getElementById('view-'+x).style.display = x===v ? '' : 'none');
+  if (v === 'tareas') renderDailyTasks();
 }
 function setFilter(f, el) { state.kFilter=f; document.querySelectorAll('#view-kanban .filter-btn').forEach(b=>b.classList.remove('active')); el.classList.add('active'); renderKanban(); }
 function setCasosFilter(f, el) { state.cFilter=f; document.querySelectorAll('#view-casos .filter-btn').forEach(b=>b.classList.remove('active')); el.classList.add('active'); renderCases(); }
