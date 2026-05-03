@@ -263,7 +263,7 @@ function updateSyncStatus(online) {
   else { dot.className = 'sync-dot offline'; txt.textContent = 'Offline'; }
 }
 
-// ==================== COMANDOS POR VOZ (iOS/Web Speech API) ====================
+// ==================== COMANDOS POR VOZ (mejorado números) ====================
 let recognition = null;
 let pendingVoiceActions = null;
 let voiceListening = false;
@@ -309,7 +309,6 @@ function initSpeechRecognition() {
 }
 
 function startVoiceCommand() {
-  // En iOS, la creación del objeto debe hacerse dentro del gesto del usuario
   if (!recognition) initSpeechRecognition();
   if (!recognition) return;
 
@@ -339,11 +338,34 @@ function stopVoiceListening() {
 }
 
 function updateMicButton(active) {
-  const btn = document.querySelector('.btn-mic');
+  const btn = document.getElementById('btnMic');
   if (btn) {
     btn.style.background = active ? 'var(--red)' : 'var(--accent)';
-    btn.textContent = active ? '🎤 Escuchando...' : '🎙️ Voz';
   }
+}
+
+// Mapeo de palabras a números (español)
+const wordToNumber = {
+  'cero':0, 'uno':1, 'una':1, 'dos':2, 'tres':3, 'cuatro':4, 'cinco':5,
+  'seis':6, 'siete':7, 'ocho':8, 'nueve':9, 'diez':10,
+  'once':11, 'doce':12, 'trece':13, 'catorce':14, 'quince':15,
+  'dieciséis':16, 'dieciséis':16, 'diecisiete':17, 'dieciocho':18, 'diecinueve':19,
+  'veinte':20, 'veintiuno':21, 'veintidós':22, 'veintitrés':23, 'veinticuatro':24,
+  'veinticinco':25, 'veintiséis':26, 'veintisiete':27, 'veintiocho':28, 'veintinueve':29,
+  'treinta':30, 'treinta y uno':31, 'treinta y dos':32, 'treinta y tres':33,
+  'cuarenta':40, 'cincuenta':50, 'sesenta':60, 'setenta':70, 'ochenta':80, 'noventa':90
+};
+
+function convertWordsToNumbers(text) {
+  // Reemplazar palabras numéricas por dígitos ( preservando rangos como "del uno al cinco" -> "del 1 al 5")
+  let converted = text;
+  // Ordenar por longitud descendente para evitar coincidencias parciales
+  const sortedWords = Object.keys(wordToNumber).sort((a,b) => b.length - a.length);
+  for (const word of sortedWords) {
+    const regex = new RegExp(`\\b${word}\\b`, 'gi');
+    converted = converted.replace(regex, wordToNumber[word].toString());
+  }
+  return converted;
 }
 
 // Vocabulario de etapas
@@ -360,24 +382,41 @@ const voiceStageMap = {
 };
 
 function extractNumbers(text) {
+  // Primero convertir palabras a números
+  const convertedText = convertWordsToNumbers(text);
   const numbers = [];
+  
+  // Buscar rangos estilo "del 1 al 5", "del 1 a 5", "1-5", "1 a 5"
   const rangeRegex = /(?:del\s+)?(\d+)\s*(?:al?|a|hasta|-)\s*(\d+)/g;
   let match;
-  while ((match = rangeRegex.exec(text)) !== null) {
+  while ((match = rangeRegex.exec(convertedText)) !== null) {
     const start = parseInt(match[1]);
     const end = parseInt(match[2]);
     for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
       numbers.push(i);
     }
   }
-  const allMatches = text.match(/\d+/g);
+  
+  // Buscar números sueltos (dígitos)
+  const allMatches = convertedText.match(/\d+/g);
   if (allMatches) {
     allMatches.forEach(numStr => {
       const num = parseInt(numStr);
       if (!numbers.includes(num)) numbers.push(num);
     });
   }
-  return [...new Set(numbers)];
+  
+  // Si aún no hay números, buscar en el texto original palabras sueltas que no están en rangos
+  if (numbers.length === 0) {
+    const words = text.split(/\s+/);
+    for (const word of words) {
+      if (wordToNumber[word] !== undefined) {
+        numbers.push(wordToNumber[word]);
+      }
+    }
+  }
+  
+  return [...new Set(numbers)]; // únicos y ordenados
 }
 
 function extractArcType(text) {
@@ -403,6 +442,8 @@ function findPatient(nameFragment) {
 }
 
 function processVoiceCommand(transcript) {
+  console.log('Transcripción original:', transcript);
+  
   let targetStage = -1;
   for (const [word, stage] of Object.entries(voiceStageMap)) {
     if (transcript.includes(word)) {
@@ -420,7 +461,7 @@ function processVoiceCommand(transcript) {
 
   const numbers = extractNumbers(transcript);
   if (numbers.length === 0) {
-    showToast('No escuché números. Decí "del 1 al 5" o "el 3 y el 7".');
+    showToast('No escuché números. Decí "del 1 al 5", "el 3 y el 7" o "los alineadores dos, tres y cuatro".');
     return;
   }
 
@@ -499,6 +540,14 @@ function executeVoiceCommand() {
   closeModal('voiceConfirmModal');
   pendingVoiceActions = null;
 }
+
+// Atajo Ctrl+M
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'm') {
+    e.preventDefault();
+    startVoiceCommand();
+  }
+});
 
 // ==================== RENDERIZADOS ====================
 function renderAll() {
