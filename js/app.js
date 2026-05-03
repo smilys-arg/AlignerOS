@@ -263,7 +263,7 @@ function updateSyncStatus(online) {
   else { dot.className = 'sync-dot offline'; txt.textContent = 'Offline'; }
 }
 
-// ==================== COMANDOS POR VOZ ====================
+// ==================== COMANDOS POR VOZ (mejorado) ====================
 let recognition;
 let pendingVoiceActions = null;
 
@@ -276,35 +276,235 @@ function initSpeechRecognition() {
   recognition = new SpeechRecognition();
   recognition.lang = 'es-ES';
   recognition.interimResults = false;
-  recognition.maxAlternatives = 1;
+  recognition.maxAlternatives = 3; // más alternativas para mejor precisión
 
   recognition.onresult = (event) => {
-    const transcript = event.results[0][0].transcript.toLowerCase().trim();
-    processVoiceCommand(transcript);
+    // Elegir la transcripción con más espacios (normalmente la más completa)
+    let bestTranscript = '';
+    for (let i = 0; i < event.results[0].length; i++) {
+      const alt = event.results[0][i].transcript.trim();
+      if (alt.split(' ').length > bestTranscript.split(' ').length) {
+        bestTranscript = alt;
+      }
+    }
+    if (!bestTranscript) bestTranscript = event.results[0][0].transcript.trim();
+    processVoiceCommand(bestTranscript.toLowerCase());
   };
 
   recognition.onerror = (event) => {
     showToast('Error de voz: ' + event.error);
-    const btn = document.querySelector('.btn-undo[title*="Cmd"]');
-    if (btn) btn.style.background = '';
+    updateMicButton(false);
   };
 
   recognition.onend = () => {
-    const btn = document.querySelector('.btn-undo[title*="Cmd"]');
-    if (btn) btn.style.background = '';
+    updateMicButton(false);
   };
+}
+
+function updateMicButton(active) {
+  const btn = document.querySelector('.btn-undo[title*="Cmd"]');
+  if (btn) btn.style.background = active ? 'var(--red)' : '';
 }
 
 function startVoiceCommand() {
   if (!recognition) initSpeechRecognition();
   if (!recognition) return;
 
-  const btn = document.querySelector('.btn-undo[title*="Cmd"]');
-  if (btn) btn.style.background = 'var(--red)';
-
+  updateMicButton(true);
   recognition.start();
-  showToast('🎤 Escuchando...');
+  showToast('🎤 Te escucho...');
 }
+
+// Vocabulario de etapas (mucho más completo)
+const voiceStageMap = {
+  // Impresión
+  'imprimí':0, 'imprimir':0, 'impresión':0, 'impresion':0, 'imprimiendo':0, 'estoy imprimiendo':0,
+  'ya imprimí':0, 'se imprimió':0, 'se imprimio':0, 'imprimio':0,
+  // Termoformado
+  'termoformé':1, 'termoformar':1, 'termoformado':1, 'termoformando':1, 'termoforme':1,
+  'ya termoformé':1, 'los termoformé':1, 'termoformo':1, 'termoformó':1, 'termoformo':1,
+  // Corte / Pulido
+  'corté':2, 'cortar':2, 'corte':2, 'cortando':2, 'ya corté':2, 'corto':2,
+  'pulí':2, 'pulir':2, 'pulido':2, 'puliendo':2, 'ya pulí':2, 'pulio':2, 'pulió':2,
+  'corté y pulí':2, 'corte y pulido':2,
+  // Envío
+  'envíe':3, 'enviar':3, 'envío':3, 'envio':3, 'enviado':3, 'envié':3, 'envie':3,
+  'lo mandé':3, 'los mandé':3, 'mandar':3, 'mandé':3,
+  // Finalizado
+  'entregué':4, 'entregar':4, 'entregado':4, 'entregue':4, 'finalicé':4, 'finalizar':4,
+  'finalizado':4, 'finalice':4, 'listo':4, 'terminé':4, 'termine':4, 'listos':4
+};
+
+function extractNumbers(text) {
+  // Extrae todos los números del texto, incluyendo aquellos dentro de rangos como "5-8", "5 a 8", "del 5 al 8"
+  const numbers = [];
+  // Primero buscamos patrones de rango explícito
+  const rangeRegex = /(?:del\s+)?(\d+)\s*(?:al?|a|hasta|-)\s*(\d+)/g;
+  let match;
+  while ((match = rangeRegex.exec(text)) !== null) {
+    const start = parseInt(match[1]);
+    const end = parseInt(match[2]);
+    for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
+      numbers.push(i);
+    }
+  }
+  // Luego números sueltos (que no formen parte de un rango ya capturado)
+  const allMatches = text.match(/\d+/g);
+  if (allMatches) {
+    allMatches.forEach(numStr => {
+      const num = parseInt(numStr);
+      if (!numbers.includes(num) && !text.match(new RegExp(`del\\s+${num}\\s+al?\\s+\\d+`))) {
+        numbers.push(num);
+      }
+    });
+  }
+  return [...new Set(numbers)]; // únicos
+}
+
+function extractArcType(text) {
+  // Devuelve 'sup', 'inf', o 'ambas'
+  const supWords = ['superior', 'superiores', 'arriba', 'maxilar superior', 'los de arriba', 'sup', 's'];
+  const infWords = ['inferior', 'inferiores', 'abajo', 'maxilar inferior', 'los de abajo', 'inf', 'i'];
+  const hasSup = supWords.some(w => text.includes(w));
+  const hasInf = infWords.some(w => text.includes(w));
+  if (hasSup && hasInf) return 'ambas';
+  if (hasSup) return 'sup';
+  if (hasInf) return 'inf';
+  return null;
+}
+
+function findPatient(nameFragment) {
+  if (!nameFragment || nameFragment.length < 2) return null;
+  const lower = nameFragment.toLowerCase();
+  const matches = state.cases.filter(c =>
+    c.patient.toLowerCase().includes(lower) ||
+    (c.doctorId && c.doctorId.toLowerCase().includes(lower)) ||
+    (c.doctor && c.doctor.toLowerCase().includes(lower))
+  );
+  return matches.length > 0 ? matches : null;
+}
+
+function processVoiceCommand(transcript) {
+  console.log('Transcripción:', transcript);
+
+  // Detectar etapa (primera palabra clave que coincida)
+  let targetStage = -1;
+  for (const [word, stage] of Object.entries(voiceStageMap)) {
+    if (transcript.includes(word)) {
+      targetStage = stage;
+      break;
+    }
+  }
+  if (targetStage === -1) {
+    showToast('No entendí la etapa. Probá decir: "imprimí", "termoformé", "corté/pulí", "envié" o "entregué".');
+    return;
+  }
+
+  // Detectar arcada
+  let arcType = extractArcType(transcript);
+  if (!arcType) arcType = 'ambas'; // por defecto mover en ambas si no se especifica
+
+  // Extraer números
+  const numbers = extractNumbers(transcript);
+  if (numbers.length === 0) {
+    showToast('No escuché números. Decí "del 1 al 5" o "el 3 y el 7".');
+    return;
+  }
+
+  // Buscar paciente (antes o después de números)
+  const patientRegex = /(?:paciente|de|del|para|a|al)\s+([a-záéíóúñ]+\s?[a-záéíóúñ]*)/i;
+  const patientMatch = transcript.match(patientRegex);
+  let patientName = null;
+  if (patientMatch) {
+    patientName = patientMatch[1].trim();
+  } else {
+    // Intentar usar palabras que suenen a nombre propio (primera palabra con mayúscula en el estado)
+    const words = transcript.split(' ');
+    for (const word of words) {
+      const matches = state.cases.filter(c => c.patient.toLowerCase().includes(word));
+      if (matches.length === 1) { patientName = word; break; }
+    }
+  }
+  if (!patientName) {
+    showToast('No reconocí el paciente. Decí "paciente Carlos" o "de Lucía".');
+    return;
+  }
+
+  const matchedCases = findPatient(patientName);
+  if (!matchedCases || matchedCases.length === 0) {
+    showToast(`Paciente "${patientName}" no encontrado.`);
+    return;
+  }
+  const matchedCase = matchedCases[0]; // si hay varios, usar el primero
+
+  // Construir acciones
+  pendingVoiceActions = {
+    targetStage,
+    matchedCase,
+    actions: []
+  };
+
+  if (arcType === 'ambas') {
+    if (matchedCase.arcadas.sup) pendingVoiceActions.actions.push({ arcType: 'sup', numbers: [...numbers] });
+    if (matchedCase.arcadas.inf) pendingVoiceActions.actions.push({ arcType: 'inf', numbers: [...numbers] });
+  } else {
+    if (matchedCase.arcadas[arcType]) pendingVoiceActions.actions.push({ arcType, numbers: [...numbers] });
+  }
+
+  renderVoiceConfirmation(patientName, targetStage);
+}
+
+function renderVoiceConfirmation(patientName, targetStage) {
+  if (!pendingVoiceActions) return;
+  const content = document.getElementById('voiceConfirmContent');
+  const stageNames = STAGES.concat(['Finalizado']);
+  let html = `<p>Paciente: <strong>${pendingVoiceActions.matchedCase.patient}</strong></p>`;
+  html += `<p>Etapa: <strong>${stageNames[targetStage]}</strong></p>`;
+  html += '<p>Alineadores:</p><ul>';
+  pendingVoiceActions.actions.forEach(a => {
+    const arcName = a.arcType === 'sup' ? 'Superior' : 'Inferior';
+    html += `<li>${arcName}: ${a.numbers.join(', ')}</li>`;
+  });
+  html += '</ul>';
+  content.innerHTML = html;
+  openModal('voiceConfirmModal');
+}
+
+function executeVoiceCommand() {
+  if (!pendingVoiceActions) return;
+  const { matchedCase, actions, targetStage } = pendingVoiceActions;
+  let movedCount = 0;
+
+  actions.forEach(action => {
+    const arc = matchedCase.arcadas[action.arcType];
+    if (!arc) return;
+    action.numbers.forEach(i => {
+      if (i >= 0 && i < arc.total) {
+        arc.alinStates[i] = targetStage;
+        movedCount++;
+      }
+    });
+  });
+
+  if (movedCount > 0) {
+    addActivity(`🎤 Voz: ${matchedCase.patient} - ${movedCount} alin. → ${STAGES[targetStage] || 'Finalizado'}`);
+    renderAll();
+    showToast(`${movedCount} alin. movidos por voz ✓`);
+  } else {
+    showToast('No se pudo mover ningún alineador. Verificá los números.');
+  }
+
+  closeModal('voiceConfirmModal');
+  pendingVoiceActions = null;
+}
+
+// Atajo Ctrl+M para activar micrófono
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'm') {
+    e.preventDefault();
+    startVoiceCommand();
+  }
+});
 
 // Mapeo de palabras clave a stage index
 const voiceStageMap = {
