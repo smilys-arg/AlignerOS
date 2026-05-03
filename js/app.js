@@ -263,7 +263,7 @@ function updateSyncStatus(online) {
   else { dot.className = 'sync-dot offline'; txt.textContent = 'Offline'; }
 }
 
-// ==================== COMANDOS POR VOZ (mejorado números) ====================
+// ==================== COMANDOS POR VOZ (Flexible) ====================
 let recognition = null;
 let pendingVoiceActions = null;
 let voiceListening = false;
@@ -338,34 +338,11 @@ function stopVoiceListening() {
 }
 
 function updateMicButton(active) {
-  const btn = document.getElementById('btnMic');
+  const btn = document.querySelector('.btn-mic');
   if (btn) {
     btn.style.background = active ? 'var(--red)' : 'var(--accent)';
+    btn.textContent = active ? '🎤' : '🎙️';
   }
-}
-
-// Mapeo de palabras a números (español)
-const wordToNumber = {
-  'cero':0, 'uno':1, 'una':1, 'dos':2, 'tres':3, 'cuatro':4, 'cinco':5,
-  'seis':6, 'siete':7, 'ocho':8, 'nueve':9, 'diez':10,
-  'once':11, 'doce':12, 'trece':13, 'catorce':14, 'quince':15,
-  'dieciséis':16, 'dieciséis':16, 'diecisiete':17, 'dieciocho':18, 'diecinueve':19,
-  'veinte':20, 'veintiuno':21, 'veintidós':22, 'veintitrés':23, 'veinticuatro':24,
-  'veinticinco':25, 'veintiséis':26, 'veintisiete':27, 'veintiocho':28, 'veintinueve':29,
-  'treinta':30, 'treinta y uno':31, 'treinta y dos':32, 'treinta y tres':33,
-  'cuarenta':40, 'cincuenta':50, 'sesenta':60, 'setenta':70, 'ochenta':80, 'noventa':90
-};
-
-function convertWordsToNumbers(text) {
-  // Reemplazar palabras numéricas por dígitos ( preservando rangos como "del uno al cinco" -> "del 1 al 5")
-  let converted = text;
-  // Ordenar por longitud descendente para evitar coincidencias parciales
-  const sortedWords = Object.keys(wordToNumber).sort((a,b) => b.length - a.length);
-  for (const word of sortedWords) {
-    const regex = new RegExp(`\\b${word}\\b`, 'gi');
-    converted = converted.replace(regex, wordToNumber[word].toString());
-  }
-  return converted;
 }
 
 // Vocabulario de etapas
@@ -381,69 +358,101 @@ const voiceStageMap = {
   'finalizar':4, 'finalizado':4, 'finalice':4, 'listo':4, 'terminé':4
 };
 
+// Normalizar palabras numéricas a dígitos
+const wordToNumber = {
+  'cero': '0', 'uno': '1', 'una': '1', 'dos': '2', 'tres': '3', 'cuatro': '4',
+  'cinco': '5', 'seis': '6', 'siete': '7', 'ocho': '8', 'nueve': '9',
+  'diez': '10', 'once': '11', 'doce': '12', 'trece': '13', 'catorce': '14',
+  'quince': '15', 'dieciséis': '16', 'diecisiete': '17',
+  'dieciocho': '18', 'diecinueve': '19', 'veinte': '20', 'veintiuno': '21', 'veintidos': '22',
+  'veintitres': '23', 'veinticuatro': '24', 'veinticinco': '25', 'veintiseis': '26',
+  'veintiocho': '28', 'veintinueve': '29', 'trinta': '30', 'treinta y uno': '31'
+};
+
+function normalizeNumbers(text) {
+  let result = text;
+  for (const [word, digit] of Object.entries(wordToNumber)) {
+    result = result.replace(new RegExp('\\b' + word + '\\b', 'gi'), digit);
+  }
+  return result;
+}
+
 function extractNumbers(text) {
-  // Primero convertir palabras a números
-  const convertedText = convertWordsToNumbers(text);
+  const normalized = normalizeNumbers(text);
   const numbers = [];
-  
-  // Buscar rangos estilo "del 1 al 5", "del 1 a 5", "1-5", "1 a 5"
   const rangeRegex = /(?:del\s+)?(\d+)\s*(?:al?|a|hasta|-)\s*(\d+)/g;
   let match;
-  while ((match = rangeRegex.exec(convertedText)) !== null) {
+  while ((match = rangeRegex.exec(normalized)) !== null) {
     const start = parseInt(match[1]);
     const end = parseInt(match[2]);
     for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
       numbers.push(i);
     }
   }
-  
-  // Buscar números sueltos (dígitos)
-  const allMatches = convertedText.match(/\d+/g);
-  if (allMatches) {
-    allMatches.forEach(numStr => {
+  const allDigits = normalized.match(/\d+/g);
+  if (allDigits) {
+    allDigits.forEach(numStr => {
       const num = parseInt(numStr);
       if (!numbers.includes(num)) numbers.push(num);
     });
   }
+  return [...new Set(numbers)].sort((a,b)=>a-b);
+}
+
+function extractNumbersNearArc(text, arcType) {
+  const normalized = normalizeNumbers(text);
+  const arcWords = arcType === 'sup' 
+    ? ['superior', 'superiores', 'arriba', 'sup']
+    : ['inferior', 'inferiores', 'abajo', 'inf'];
   
-  // Si aún no hay números, buscar en el texto original palabras sueltas que no están en rangos
-  if (numbers.length === 0) {
-    const words = text.split(/\s+/);
-    for (const word of words) {
-      if (wordToNumber[word] !== undefined) {
-        numbers.push(wordToNumber[word]);
-      }
+  // Encontrar todas las posiciones de palabras de arcada
+  const arcPositions = [];
+  for (const word of arcWords) {
+    let idx = normalized.indexOf(word);
+    while (idx !== -1) {
+      arcPositions.push({ index: idx, word });
+      idx = normalized.indexOf(word, idx + 1);
     }
   }
   
-  return [...new Set(numbers)]; // únicos y ordenados
+  if (arcPositions.length === 0) return [];
+  
+  // Extraer números que estén dentro de una ventana cercana a cualquier mención de arcada
+  const numbers = [];
+  const numRegex = /\d+/g;
+  let numMatch;
+  while ((numMatch = numRegex.exec(normalized)) !== null) {
+    const num = parseInt(numMatch[0]);
+    const numPos = numMatch.index;
+    // Verificar proximidad a alguna mención de arcada (antes o después)
+    const isNear = arcPositions.some(arc => 
+      Math.abs(arc.index - numPos) < 40 // 40 caracteres de margen
+    );
+    if (isNear && !numbers.includes(num)) {
+      numbers.push(num);
+    }
+  }
+  return numbers.sort((a,b)=>a-b);
 }
 
-function extractArcType(text) {
-  const supWords = ['superior', 'superiores', 'arriba', 'maxilar superior', 'los de arriba', 'sup'];
-  const infWords = ['inferior', 'inferiores', 'abajo', 'maxilar inferior', 'los de abajo', 'inf'];
-  const hasSup = supWords.some(w => text.includes(w));
-  const hasInf = infWords.some(w => text.includes(w));
-  if (hasSup && hasInf) return 'ambas';
-  if (hasSup) return 'sup';
-  if (hasInf) return 'inf';
+function findPatientMention(text) {
+  // Buscar cualquier palabra que coincida con el nombre de un paciente
+  const words = text.toLowerCase().split(/[\s,;.]+/);
+  for (const word of words) {
+    if (word.length < 2) continue;
+    const match = state.cases.find(c => 
+      c.patient.toLowerCase().includes(word) ||
+      (c.doctorId && c.doctorId.toLowerCase().includes(word))
+    );
+    if (match) return match;
+  }
   return null;
 }
 
-function findPatient(nameFragment) {
-  if (!nameFragment || nameFragment.length < 2) return null;
-  const lower = nameFragment.toLowerCase();
-  const matches = state.cases.filter(c =>
-    c.patient.toLowerCase().includes(lower) ||
-    (c.doctorId && c.doctorId.toLowerCase().includes(lower)) ||
-    (c.doctor && c.doctor.toLowerCase().includes(lower))
-  );
-  return matches.length > 0 ? matches : null;
-}
-
 function processVoiceCommand(transcript) {
-  console.log('Transcripción original:', transcript);
-  
+  console.log('Transcripción:', transcript);
+
+  // Detectar etapa
   let targetStage = -1;
   for (const [word, stage] of Object.entries(voiceStageMap)) {
     if (transcript.includes(word)) {
@@ -456,48 +465,44 @@ function processVoiceCommand(transcript) {
     return;
   }
 
-  let arcType = extractArcType(transcript);
-  if (!arcType) arcType = 'ambas';
-
-  const numbers = extractNumbers(transcript);
-  if (numbers.length === 0) {
-    showToast('No escuché números. Decí "del 1 al 5", "el 3 y el 7" o "los alineadores dos, tres y cuatro".');
+  // Detectar paciente
+  const matchedCase = findPatientMention(transcript);
+  if (!matchedCase) {
+    showToast('No reconocí el paciente. Mencioná el nombre como está en la lista.');
     return;
   }
 
-  const patientRegex = /(?:paciente|de|del|para|a|al)\s+([a-záéíóúñ]+\s?[a-záéíóúñ]*)/i;
-  const patientMatch = transcript.match(patientRegex);
-  let patientName = null;
-  if (patientMatch) {
-    patientName = patientMatch[1].trim();
-  } else {
-    const words = transcript.split(' ');
-    for (const word of words) {
-      const matches = state.cases.filter(c => c.patient.toLowerCase().includes(word));
-      if (matches.length === 1) { patientName = word; break; }
+  // Extraer números para cada arcada según menciones cercanas
+  const supNumbers = extractNumbersNearArc(transcript, 'sup');
+  const infNumbers = extractNumbersNearArc(transcript, 'inf');
+
+  // Si no se detectó ninguna arcada, usar todos los números y aplicar a ambas (si existen)
+  if (supNumbers.length === 0 && infNumbers.length === 0) {
+    const allNumbers = extractNumbers(transcript);
+    if (allNumbers.length === 0) {
+      showToast('No escuché números. Decí "del 1 al 5" o "el 3, el 5 y el 7".');
+      return;
     }
-  }
-  if (!patientName) {
-    showToast('No reconocí el paciente. Decí "paciente Carlos" o "de Lucía".');
-    return;
+    // Asignar a la arcada que existe
+    if (matchedCase.arcadas.sup) supNumbers.push(...allNumbers);
+    if (matchedCase.arcadas.inf) infNumbers.push(...allNumbers);
   }
 
-  const matchedCases = findPatient(patientName);
-  if (!matchedCases || matchedCases.length === 0) {
-    showToast(`Paciente "${patientName}" no encontrado.`);
-    return;
-  }
-  const matchedCase = matchedCases[0];
-
+  // Construir acciones
   pendingVoiceActions = { targetStage, matchedCase, actions: [] };
-  if (arcType === 'ambas') {
-    if (matchedCase.arcadas.sup) pendingVoiceActions.actions.push({ arcType: 'sup', numbers: [...numbers] });
-    if (matchedCase.arcadas.inf) pendingVoiceActions.actions.push({ arcType: 'inf', numbers: [...numbers] });
-  } else {
-    if (matchedCase.arcadas[arcType]) pendingVoiceActions.actions.push({ arcType, numbers: [...numbers] });
+  if (supNumbers.length > 0 && matchedCase.arcadas.sup) {
+    pendingVoiceActions.actions.push({ arcType: 'sup', numbers: [...new Set(supNumbers)].sort((a,b)=>a-b) });
+  }
+  if (infNumbers.length > 0 && matchedCase.arcadas.inf) {
+    pendingVoiceActions.actions.push({ arcType: 'inf', numbers: [...new Set(infNumbers)].sort((a,b)=>a-b) });
   }
 
-  renderVoiceConfirmation(patientName, targetStage);
+  if (pendingVoiceActions.actions.length === 0) {
+    showToast('No hay alineadores para mover en esa arcada.');
+    return;
+  }
+
+  renderVoiceConfirmation(matchedCase.patient, targetStage);
 }
 
 function renderVoiceConfirmation(patientName, targetStage) {
@@ -541,7 +546,7 @@ function executeVoiceCommand() {
   pendingVoiceActions = null;
 }
 
-// Atajo Ctrl+M
+// Atajo de teclado
 document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.key === 'm') {
     e.preventDefault();
