@@ -38,6 +38,9 @@ header{display:flex;align-items:center;justify-content:space-between;padding:0 2
 .tab:hover{color:var(--text);background:var(--surface2)}
 .tab.active{color:var(--accent);background:rgba(37,99,235,.08)}
 .header-right{display:flex;gap:12px;align-items:center;flex-shrink:0}
+.sync-indicator{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text3);cursor:pointer}
+.sync-dot{width:6px;height:6px;border-radius:50%;background:var(--green)}
+.sync-dot.offline{background:var(--red)}
 .btn-new{padding:8px 16px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);font-family:'Inter',sans-serif;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap;transition:background .15s;touch-action:manipulation;box-shadow:var(--shadow-sm)}
 .btn-new:hover{background:var(--accent2)}
 
@@ -212,6 +215,10 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
     <button class="tab" onclick="switchView('stock',this)">Stock</button>
   </nav>
   <div class="header-right">
+    <div class="sync-indicator" id="syncIndicator" onclick="syncFromFirebase()" title="Tocar para sincronizar">
+      <span class="sync-dot offline" id="syncDot"></span>
+      <span id="syncText">Offline</span>
+    </div>
     <button class="btn-new" onclick="openNewCase()">+ Nuevo caso</button>
   </div>
 </header>
@@ -314,6 +321,10 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 
 <div class="toast" id="toast"></div>
 
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
 <script>
 // ==================== PWA ====================
 (function() {
@@ -336,6 +347,22 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
     navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
   }
 })();
+
+// ==================== FIREBASE ====================
+const firebaseConfig = {
+  apiKey: "AIzaSyCSsY1tA5AFzIVj-Tbg-XjxoKY73W0YPZs",
+  authDomain: "alingneros.firebaseapp.com",
+  databaseURL: "https://alingneros-default-rtdb.firebaseio.com",
+  projectId: "alingneros",
+  storageBucket: "alingneros.firebasestorage.app",
+  messagingSenderId: "868408246733",
+  appId: "1:868408246733:web:4affa1c056767283b10484"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+let pendingWrite = null;
+let writeTimer = null;
 
 // ===================================================================
 const STAGES = ['Impresión','Termoformado','Corte / Pulido','Envío'];
@@ -910,7 +937,7 @@ function buildCasesFromCSV(csvText) {
       if (max >= 0) {
         caso.arcadas[at] = { total: max + 1, alinStates: new Array(max + 1).fill(-1) };
       } else {
-        caso.arcadas[at] = null; // maxilar sin alineadores
+        caso.arcadas[at] = null;
       }
     });
     delete caso._maxSteps;
@@ -962,8 +989,62 @@ function loadState(){
 
 function saveState(){
   try {
-    localStorage.setItem(LS_KEY, JSON.stringify({ cases: state.cases, stock: state.stock }));
+    const data = { cases: state.cases, stock: state.stock };
+    localStorage.setItem(LS_KEY, JSON.stringify(data));
+    if (db) {
+      pendingWrite = data;
+      clearTimeout(writeTimer);
+      writeTimer = setTimeout(() => {
+        if (pendingWrite) {
+          db.ref('/').set(pendingWrite, (error) => {
+            if (error) console.error("Firebase write failed:", error);
+            else pendingWrite = null;
+          });
+        }
+      }, 300);
+    }
   } catch(e) { console.error('Error al guardar', e); }
+}
+
+function setupFirebaseListener() {
+  if (!db) return;
+  db.ref('/').on('value', snap => {
+    const remote = snap.val();
+    if (remote && remote.cases && remote.stock && !pendingWrite) {
+      state.cases = remote.cases;
+      state.stock = remote.stock;
+      clearSelection();
+      renderAll();
+      updateSyncStatus(true);
+    }
+  });
+  db.ref('.info/connected').on('value', snap => {
+    updateSyncStatus(snap.val() === true);
+  });
+}
+
+function syncFromFirebase() {
+  if (db) {
+    db.ref('/').once('value').then(snap => {
+      const remote = snap.val();
+      if (remote && remote.cases && remote.stock) {
+        state.cases = remote.cases;
+        state.stock = remote.stock;
+        clearSelection();
+        renderAll();
+        saveState();
+        showToast('Sincronizado con la nube');
+        updateSyncStatus(true);
+      }
+    }).catch(() => showToast('Error al sincronizar'));
+  }
+}
+
+function updateSyncStatus(online) {
+  const dot = document.getElementById('syncDot');
+  const txt = document.getElementById('syncText');
+  if (online) { dot.className = 'sync-dot'; txt.textContent = 'Sincronizado'; }
+  else { dot.className = 'sync-dot offline'; txt.textContent = 'Offline'; }
 }
 
 function renderAll() {
@@ -1149,7 +1230,7 @@ function renderCases() {
     const p = getPrio(c.delivery); const d = daysUntil(c.delivery);
     const arcHtml = ['sup','inf'].map(at => {
       const arc = c.arcadas[at];
-      if (!arc) return ''; // no mostrar bloque si no hay alineadores
+      if (!arc) return '';
       const lbl = at==='sup'?'▲ Superior':'▼ Inferior';
       const selSame = selection.caseId===c.id && selection.arcType===at;
       const chips = arc.alinStates.map((st,i) => {
@@ -1388,6 +1469,7 @@ function showToast(msg) {
 document.getElementById('bn-kanban').classList.add('active');
 loadState();
 renderAll();
+setupFirebaseListener();
 </script>
 </body>
 </html>
