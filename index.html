@@ -131,6 +131,21 @@
   </div>
 </div>
 
+<!-- Modal Confirmación de Voz -->
+<div class="modal-overlay" id="voiceConfirmModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('voiceConfirmModal')">&times;</button>
+    <div class="modal-handle"></div>
+    <div class="modal-title">Comando de voz detectado</div>
+    <div id="voiceConfirmContent" style="font-size:13px;color:var(--text2);margin-bottom:16px"></div>
+    <div class="form-actions">
+      <button class="btn-cancel" onclick="closeModal('voiceConfirmModal')">Cancelar</button>
+      <button class="btn-submit" onclick="executeVoiceCommand()">Ejecutar</button>
+      <button class="btn-cancel" onclick="startVoiceCommand()">🎙️ Volver a dictar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal Reponer -->
 <div class="modal-overlay" id="reponerModal">
   <div class="modal">
