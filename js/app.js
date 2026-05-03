@@ -263,6 +263,251 @@ function updateSyncStatus(online) {
   else { dot.className = 'sync-dot offline'; txt.textContent = 'Offline'; }
 }
 
+// ==================== COMANDOS POR VOZ ====================
+let recognition;
+let pendingVoiceActions = null;
+
+function initSpeechRecognition() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    alert('Tu navegador no soporta reconocimiento de voz. Probá con Chrome.');
+    return;
+  }
+  recognition = new SpeechRecognition();
+  recognition.lang = 'es-ES';
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  recognition.onresult = (event) => {
+    const transcript = event.results[0][0].transcript.toLowerCase().trim();
+    processVoiceCommand(transcript);
+  };
+
+  recognition.onerror = (event) => {
+    showToast('Error de voz: ' + event.error);
+    const btn = document.querySelector('.btn-undo[title*="Cmd"]');
+    if (btn) btn.style.background = '';
+  };
+
+  recognition.onend = () => {
+    const btn = document.querySelector('.btn-undo[title*="Cmd"]');
+    if (btn) btn.style.background = '';
+  };
+}
+
+function startVoiceCommand() {
+  if (!recognition) initSpeechRecognition();
+  if (!recognition) return;
+
+  const btn = document.querySelector('.btn-undo[title*="Cmd"]');
+  if (btn) btn.style.background = 'var(--red)';
+
+  recognition.start();
+  showToast('🎤 Escuchando...');
+}
+
+// Mapeo de palabras clave a stage index
+const voiceStageMap = {
+  'imprimir': 0, 'impresión': 0, 'imprimió': 0, 'imprimí': 0,
+  'termoformar': 1, 'termoformado': 1, 'termoformé': 1, 'termoformó': 1,
+  'cortar': 2, 'corte': 2, 'pulir': 2, 'pulido': 2, 'corté': 2, 'pulí': 2,
+  'enviar': 3, 'envío': 3, 'envié': 3, 'envió': 3,
+  'entregar': 4, 'finalizar': 4, 'finalizado': 4, 'entregué': 4, 'entregó': 4
+};
+
+function extractRanges(text) {
+  // Patrón: número (al|a|-|hasta) número o número suelto
+  const ranges = [];
+  const rangeRegex = /(\d+)\s*(?:al|a|hasta|-)\s*(\d+)/g;
+  let match;
+  while ((match = rangeRegex.exec(text)) !== null) {
+    ranges.push({ start: parseInt(match[1]), end: parseInt(match[2]) });
+  }
+  // Buscar números sueltos que no sean parte de un rango
+  const singleNumbers = [];
+  const allNumbers = text.match(/\d+/g);
+  if (allNumbers) {
+    allNumbers.forEach(num => {
+      const n = parseInt(num);
+      if (!ranges.some(r => r.start === n || r.end === n)) {
+        singleNumbers.push(n);
+      }
+    });
+  }
+  return { ranges, singles: singleNumbers };
+}
+
+function processVoiceCommand(transcript) {
+  console.log('Transcripción:', transcript);
+
+  // Detectar etapa
+  let targetStage = -1;
+  let stageWord = '';
+  for (const [word, stage] of Object.entries(voiceStageMap)) {
+    if (transcript.includes(word)) {
+      targetStage = stage;
+      stageWord = word;
+      break;
+    }
+  }
+  if (targetStage === -1) {
+    showToast('No entendí la etapa. Decí "imprimí", "termoformé", "corté", "envié" o "entregué".');
+    return;
+  }
+
+  // Detectar arcada y rangos
+  const arcadaPatterns = {
+    'superior': ['superior', 'arriba'],
+    'inferior': ['inferior', 'abajo']
+  };
+
+  let actions = [];
+
+  for (const [arcType, keywords] of Object.entries(arcadaPatterns)) {
+    // Buscar la parte del texto relacionada con esta arcada
+    let relevantText = transcript;
+    // Intentar encontrar la sección: desde la arcada hacia atrás hasta otra arcada o inicio
+    const arcRegex = new RegExp(`(.*?)(?:${keywords.join('|')})`);
+    const match = relevantText.match(arcRegex);
+    if (match) {
+      const { ranges, singles } = extractRanges(match[1] + ' ' + transcript.slice(transcript.indexOf(match[0]) + match[0].length));
+      if (ranges.length > 0 || singles.length > 0) {
+        actions.push({ arcType, ranges, singles });
+      }
+    }
+  }
+
+  // Si no se detectó arcada explícita, asumimos que aplica a ambas si el paciente solo tiene una arcada
+  if (actions.length === 0) {
+    const { ranges, singles } = extractRanges(transcript);
+    if (ranges.length > 0 || singles.length > 0) {
+      // Aplicar a ambas arcadas si existen
+      actions.push({ arcType: 'sup', ranges, singles });
+      actions.push({ arcType: 'inf', ranges, singles });
+    }
+  }
+
+  // Detectar paciente
+  const patientKeywords = ['paciente', 'de', 'del', 'para', 'a'];
+  const patientRegex = new RegExp(`(?:${patientKeywords.join('|')})\\s+([a-záéíóúñ]+\\s*[a-záéíóúñ]*)`, 'i');
+  const patientMatch = transcript.match(patientRegex);
+  let patientName = '';
+  if (patientMatch) {
+    patientName = patientMatch[1].trim();
+  } else {
+    // Buscar nombre propio sin preposición (poco frecuente)
+    const words = transcript.split(' ');
+    // Tomar palabras con mayúscula inicial en la app
+  }
+
+  // Buscar el paciente en state.cases
+  let matchedCase = null;
+  if (patientName) {
+    const lowerName = patientName.toLowerCase();
+    const matches = state.cases.filter(c =>
+      c.patient.toLowerCase().includes(lowerName) ||
+      (c.doctorId && c.doctorId.toLowerCase().includes(lowerName))
+    );
+    if (matches.length === 1) {
+      matchedCase = matches[0];
+    } else if (matches.length > 1) {
+      // Mostrar ambigüedad en el modal
+      pendingVoiceActions = { targetStage, actions, ambiguous: matches };
+      renderVoiceConfirmation(patientName, targetStage, actions, matches);
+      return;
+    } else {
+      // Sin coincidencia, mostrar mensaje
+      showToast(`Paciente "${patientName}" no encontrado.`);
+      return;
+    }
+  } else {
+    showToast('Decí el nombre del paciente. Ej: "del paciente Carlos"');
+    return;
+  }
+
+  pendingVoiceActions = { targetStage, actions, matchedCase };
+  renderVoiceConfirmation(patientName, targetStage, actions, [matchedCase]);
+}
+
+function renderVoiceConfirmation(patientName, targetStage, actions, matches) {
+  const content = document.getElementById('voiceConfirmContent');
+  const stageNames = STAGES.concat(['Finalizado']);
+  let html = `<p>Paciente: <strong>${matches[0].patient}</strong></p>`;
+  html += `<p>Etapa: <strong>${stageNames[targetStage]}</strong></p>`;
+  html += '<p>Cambios:</p><ul>';
+  if (actions.length === 0) {
+    html += '<li>No se detectaron alineadores específicos.</li>';
+  } else {
+    actions.forEach(a => {
+      const arcName = a.arcType === 'sup' ? 'Superior' : 'Inferior';
+      let rangesStr = '';
+      if (a.ranges.length > 0) {
+        rangesStr += a.ranges.map(r => `${r.start}-${r.end}`).join(', ');
+      }
+      if (a.singles.length > 0) {
+        if (rangesStr) rangesStr += ', ';
+        rangesStr += a.singles.join(', ');
+      }
+      html += `<li>${arcName}: ${rangesStr}</li>`;
+    });
+  }
+  html += '</ul>';
+  if (matches.length > 1) {
+    html += '<p style="color:var(--red)">⚠ Múltiples coincidencias, se usará la primera.</p>';
+  }
+  content.innerHTML = html;
+  openModal('voiceConfirmModal');
+}
+
+function executeVoiceCommand() {
+  if (!pendingVoiceActions) return;
+  const { targetStage, actions, matchedCase } = pendingVoiceActions;
+  if (!matchedCase) return;
+
+  // Ejecutar movimientos
+  let movedCount = 0;
+  actions.forEach(action => {
+    const arc = matchedCase.arcadas[action.arcType];
+    if (!arc) return;
+    // Convertir rangos a índices
+    const indices = new Set();
+    action.ranges.forEach(r => {
+      for (let i = Math.min(r.start, r.end); i <= Math.max(r.start, r.end); i++) {
+        if (i >= 0 && i < arc.total) indices.add(i);
+      }
+    });
+    action.singles.forEach(i => {
+      if (i >= 0 && i < arc.total) indices.add(i);
+    });
+    // Mover cada índice
+    indices.forEach(i => {
+      if (arc.alinStates[i] !== undefined) {
+        arc.alinStates[i] = targetStage;
+        movedCount++;
+      }
+    });
+  });
+
+  if (movedCount > 0) {
+    addActivity(`🎤 Voz: ${matchedCase.patient} - ${movedCount} alin. → ${STAGES[targetStage] || 'Finalizado'}`);
+    renderAll();
+    showToast(`${movedCount} alin. movidos por voz ✓`);
+  } else {
+    showToast('No se pudo mover ningún alineador. Verificá los números.');
+  }
+
+  closeModal('voiceConfirmModal');
+  pendingVoiceActions = null;
+}
+
+// Atajo Ctrl+M para activar micrófono
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key === 'm') {
+    e.preventDefault();
+    startVoiceCommand();
+  }
+});
+
 // ==================== RENDERIZADOS ====================
 function renderAll() {
   renderStats();
