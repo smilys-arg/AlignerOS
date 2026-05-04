@@ -1033,28 +1033,36 @@ function normalizeNumbers(text) {
 }
 
 function extractNumbers(text) {
+  // Normalizar palabras numéricas primero
   const normalized = normalizeNumbers(text);
   const numbers = [];
 
+  // Rangos explícitos: "del 0 al 4", "0-4", "0 a 4", "0 al 4", "0 hasta 4"
   const rangeRegex = /(?:del\s+)?(\d+)\s*(?:al?|a|hasta|-)\s*(\d+)/g;
   let match;
   while ((match = rangeRegex.exec(normalized)) !== null) {
     const start = parseInt(match[1]);
     const end = parseInt(match[2]);
+    // Agregar todos los números del rango (incluso si start > end)
     for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
-      numbers.push(i);
+      if (!numbers.includes(i)) numbers.push(i);
     }
   }
 
+  // Números sueltos (que no formen parte de un rango ya capturado)
   const allDigits = normalized.match(/\d+/g);
   if (allDigits) {
     allDigits.forEach(numStr => {
       const num = parseInt(numStr);
+      // Solo agregar si no está ya en la lista (evita duplicados)
       if (!numbers.includes(num)) {
         numbers.push(num);
       }
     });
   }
+
+  return numbers.sort((a, b) => a - b); // orden ascendente
+}
 
   return [...new Set(numbers)].sort((a,b)=>a-b);
 }
