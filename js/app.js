@@ -1067,6 +1067,7 @@ function extractNumbersNearArc(text, arcType) {
     ? ['superior', 'superiores', 'arriba', 'sup']
     : ['inferior', 'inferiores', 'abajo', 'inf'];
   
+  // Encontrar todas las posiciones de palabras de arcada
   const arcPositions = [];
   for (const word of arcWords) {
     let idx = normalized.indexOf(word);
@@ -1078,20 +1079,19 @@ function extractNumbersNearArc(text, arcType) {
   
   if (arcPositions.length === 0) return [];
   
-  const numbers = [];
-  const numRegex = /\d+/g;
-  let numMatch;
-  while ((numMatch = numRegex.exec(normalized)) !== null) {
-    const num = parseInt(numMatch[0]);
-    const numPos = numMatch.index;
-    const isNear = arcPositions.some(arc => 
-      Math.abs(arc.index - numPos) < 60
-    );
-    if (isNear && !numbers.includes(num)) {
-      numbers.push(num);
-    }
-  }
-  return numbers.sort((a,b)=>a-b);
+  // Para cada mención de arcada, tomar una ventana de texto alrededor y extraer números
+  const allNumbers = new Set();
+  const windowSize = 80; // caracteres a cada lado
+  
+  arcPositions.forEach(pos => {
+    const start = Math.max(0, pos.index - windowSize);
+    const end = Math.min(normalized.length, pos.index + pos.word.length + windowSize);
+    const fragment = normalized.substring(start, end);
+    const numbersInFragment = extractNumbers(fragment); // usa la función que expande rangos
+    numbersInFragment.forEach(n => allNumbers.add(n));
+  });
+  
+  return [...allNumbers].sort((a,b)=>a-b);
 }
 
 function findPatientMention(text) {
