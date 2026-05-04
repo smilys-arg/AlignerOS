@@ -425,8 +425,10 @@ function renderKanban() {
     </div>
     <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
     <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
-    <option value="0">Imprimir</option><option value="1">Termoformar</option>
-    <option value="2">Corte/Pulido</option><option value="3">Listo</option>
+    <option value="0">Imprimir</option>
+    <option value="1">Termoformar</option>
+    <option value="2">Corte/Pulido</option>
+    <option value="3">Listo</option>
     <option value="4">Finalizado</option>
   </select>
   <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="event.stopPropagation(); moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Mover</button>
@@ -601,7 +603,7 @@ function renderCases() {
       const actHtml = selCount > 0 ? `
         <div class="arcada-actions">
           <select id="moveTarget-${c.id}-${at}" class="form-input" style="width:auto;padding:4px 8px;font-size:10px">
-            <option value="0">Impresión</option><option value="1">Termoformado</option>
+            <option value="0">Imprinir</option><option value="1">Termoformar</option>
             <option value="2">Corte/Pulido</option><option value="3">Listo</option>
             <option value="4">Finalizado</option>
           </select>
