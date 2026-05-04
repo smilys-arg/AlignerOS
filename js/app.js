@@ -415,16 +415,16 @@ function renderKanban() {
         <div class="alin-range">${rangeStr} (${it.indices.length} uds)</div>
         <div class="arc-bottom"><span class="delivery-chip ${it.p}">📅 ${d<=0?'VENCIDO':d+'d'}</span>
         <div class="quick-btns">
-          <button class="qbtn" onclick="event.stopPropagation(); toggleKanbanSelector('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Seleccionar</button>
+         <button class="qbtn" onmousedown="event.preventDefault(); toggleKanbanSelector('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Seleccionar</button>
           <button class="qbtn done-btn" onclick="event.stopPropagation(); completeStage('${it.c.id}','${it.at}',${stageIdx})">✓</button>
         </div></div>
         <div class="kanban-alin-selector" id="ksel-${cardId}" data-open-time="0">
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px">
-    <span style="font-size:10px; color:var(--text3)">Seleccioná alineadores</span>
-    <button onclick="event.stopPropagation(); document.getElementById('ksel-${cardId}').classList.remove('open')" style="background:none; border:none; color:var(--text3); cursor:pointer; font-size:14px">&times;</button>
-  </div>
-  <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
-  <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px">
+          <span style="font-size:10px; color:var(--text3)">Seleccioná alineadores</span>
+        <button onclick="event.stopPropagation(); document.getElementById('ksel-${cardId}').classList.remove('open')" style="background:none; border:none; color:var(--text3); cursor:pointer; font-size:14px">&times;</button>
+    </div>
+    <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
+    <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
     <option value="0">Impresión</option><option value="1">Termoformado</option>
     <option value="2">Corte/Pulido</option><option value="3">Envío</option>
     <option value="4">Finalizado</option>
@@ -447,7 +447,7 @@ function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
   const selector = document.getElementById(`ksel-${cardId}`);
   if (!selector) return;
 
-  // Si ya está abierto, cerrarlo
+  // Si ya está abierto, cerrarlo y salir
   if (selector.classList.contains('open')) {
     selector.classList.remove('open');
     return;
@@ -461,6 +461,7 @@ function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
   const arc = c.arcadas[arcType];
   if (!arc) return;
 
+  // Llenar chips con los alineadores de la etapa actual
   const indices = [];
   arc.alinStates.forEach((st, i) => { if (st === stageIdx) indices.push(i); });
 
@@ -469,31 +470,36 @@ function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
     `<span class="kanban-alin-item" data-idx="${i}" onclick="event.stopPropagation(); this.classList.toggle('selected')">${i}</span>`
   ).join('');
 
-  // Guardar timestamp de apertura para evitar cierre instantáneo
+  // Guardar el momento exacto de apertura
   selector.dataset.openTime = Date.now();
   selector.classList.add('open');
 }
 
-// Cerrar selectores del kanban solo si se hizo clic fuera de ellos
+// Cerrar selectores del kanban al hacer clic fuera (soluciona iPhone)
 document.addEventListener('click', function(e) {
-  // Si no hay ningún selector abierto, no hacer nada
   const openSelectors = document.querySelectorAll('.kanban-alin-selector.open');
   if (openSelectors.length === 0) return;
 
-  // Si el clic fue dentro de un selector abierto o en un botón "Seleccionar", ignorar
+  // Si el clic fue dentro de un selector abierto o en el botón "Seleccionar", no cerrar
   if (e.target.closest('.kanban-alin-selector.open') || e.target.closest('.quick-btns')) {
     return;
   }
 
-  // Cerrar todos los selectores abiertos cuyo tiempo de apertura sea > 300ms
+  // Cerrar solo selectores que llevan abiertos más de 200ms
   openSelectors.forEach(s => {
     const openTime = parseInt(s.dataset.openTime) || 0;
-    if (Date.now() - openTime > 300) {
+    if (Date.now() - openTime > 200) {
       s.classList.remove('open');
     }
   });
 });
 
+// Prevenir doble toque en iOS sobre los botones "Seleccionar"
+document.querySelectorAll('.quick-btns .qbtn').forEach(btn => {
+  btn.addEventListener('touchstart', function(e) {
+    e.preventDefault(); // Evita el click fantasma posterior
+  }, {passive: false});
+});
 function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
   currentStageIdx = parseInt(currentStageIdx, 10);
   const selector = document.getElementById(`ksel-${cardId}`);
