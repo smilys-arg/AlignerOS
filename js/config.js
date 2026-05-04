@@ -12,9 +12,9 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
 // ==================== CONSTANTES ====================
-const STAGES = ['Impresión','Termoformado','Corte / Pulido','Envío'];
-const SKEYS = ['print','thermo','cutpolish','ship'];
-const SCOLS = {print:'#2563eb',thermo:'#7c3aed',cutpolish:'#ea580c',ship:'#16a34a'};
+const STAGES = ['Imprimir','Termoformar','Cortar/Pulir','Listo'];
+const SKEYS = ['imprimir','termoformar','cutpolish','listo'];
+const SCOLS = {imprimir:'#2563eb',termoformar:'#7c3aed',cutpolish:'#ea580c',listo:'#16a34a'};
 const FINAL_STAGE = 4;
 const LS_KEY = 'aligner_data_v1';
 const MAX_UNDO = 20;
