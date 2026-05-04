@@ -284,7 +284,7 @@ function updateSyncStatus(online) {
 
 // ==================== TIEMPO ESTIMADO ====================
 function calculateEstimatedTime() {
-  const timePerStage = [50/7, 5, 10, 0]; // minutos por alineador: Impr, Termo, Corte/Pul, Envío
+  const timePerStage = [50/7, 5, 10, 0]; // minutos por alineador: Impr, Termo, Corte/Pul, Listo
   let totalMin = 0;
   state.cases.forEach(c => {
     ['sup','inf'].forEach(at => {
@@ -582,7 +582,7 @@ function renderCases() {
   }
   const bmap = {urgente:'<span class="case-badge urgente">⚠ URGENTE</span>',proximo:'<span class="case-badge proximo">● PRÓXIMO</span>',ok:'<span class="case-badge ok">✓ OK</span>'};
   const dcol = {urgente:'var(--red)',proximo:'var(--yellow)',ok:'var(--green)'};
-  const clsMap = ['print','thermo','cutpolish','ship'];
+  const clsMap = ['print','thermo','cutpolish','listo'];
   document.getElementById('casesList').innerHTML = list.map(c => {
     const p = getPrio(c.delivery); const d = daysUntil(c.delivery);
     const arcHtml = ['sup','inf'].map(at => {
@@ -602,7 +602,7 @@ function renderCases() {
         <div class="arcada-actions">
           <select id="moveTarget-${c.id}-${at}" class="form-input" style="width:auto;padding:4px 8px;font-size:10px">
             <option value="0">Impresión</option><option value="1">Termoformado</option>
-            <option value="2">Corte/Pulido</option><option value="3">Envío</option>
+            <option value="2">Corte/Pulido</option><option value="3">Listo</option>
             <option value="4">Finalizado</option>
           </select>
           <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="moveSelected('${c.id}','${at}')">Mover ${selCount}</button>
@@ -978,7 +978,7 @@ const voiceStageMap = {
   'corté':2, 'cortar':2, 'corte':2, 'cortando':2,
   'pulí':2, 'pulir':2, 'pulido':2, 'puliendo':2,
   'corté y pulí':2, 'corte y pulido':2,
-  'envíe':3, 'enviar':3, 'envío':3, 'envio':3, 'enviado':3, 'envié':3,
+  'listo':3, 'prepare':3, 'preparado':3, 'envio':3, 'enviado':3, 'envié':3,
   'lo mandé':3, 'los mandé':3, 'mandar':3, 'mandé':3,
   'entregué':4, 'entregar':4, 'entregado':4, 'entregue':4, 'finalicé':4,
   'finalizar':4, 'finalizado':4, 'finalice':4, 'listo':4, 'terminé':4
@@ -1118,7 +1118,7 @@ function processVoiceCommand(transcript) {
     }
   }
   if (targetStage === -1) {
-    showToast('No entendí la etapa. Decí: "imprimí", "termoformé", "corté/pulí", "envié" o "entregué".');
+    showToast('No entendí la etapa. Decí: "imprimir", "termoformar", "cortar/pulir", "listo" o "finalizado".');
     return;
   }
 
