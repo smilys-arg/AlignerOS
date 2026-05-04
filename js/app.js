@@ -889,7 +889,7 @@ function renderDailyTasks() {
   document.getElementById('dailyTasks').innerHTML = html;
 }
 
-// ==================== COMANDOS POR VOZ (con ajuste de stock) ====================
+// ==================== COMANDOS POR VOZ (Corregido + Rangos) ====================
 let recognition = null;
 let pendingVoiceActions = null;
 let voiceListening = false;
@@ -1033,38 +1033,32 @@ function normalizeNumbers(text) {
 }
 
 function extractNumbers(text) {
-  // Normalizar palabras numéricas primero
   const normalized = normalizeNumbers(text);
   const numbers = [];
 
-  // Rangos explícitos: "del 0 al 4", "0-4", "0 a 4", "0 al 4", "0 hasta 4"
+  // Rangos: "del 0 al 4", "0-4", "0 a 4", "0 al 4", "0 hasta 4"
   const rangeRegex = /(?:del\s+)?(\d+)\s*(?:al?|a|hasta|-)\s*(\d+)/g;
   let match;
   while ((match = rangeRegex.exec(normalized)) !== null) {
     const start = parseInt(match[1]);
     const end = parseInt(match[2]);
-    // Agregar todos los números del rango (incluso si start > end)
     for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
       if (!numbers.includes(i)) numbers.push(i);
     }
   }
 
-  // Números sueltos (que no formen parte de un rango ya capturado)
+  // Números sueltos
   const allDigits = normalized.match(/\d+/g);
   if (allDigits) {
     allDigits.forEach(numStr => {
       const num = parseInt(numStr);
-      // Solo agregar si no está ya en la lista (evita duplicados)
       if (!numbers.includes(num)) {
         numbers.push(num);
       }
     });
   }
 
-  return numbers.sort((a, b) => a - b); // orden ascendente
-}
-
-  return [...new Set(numbers)].sort((a,b)=>a-b);
+  return numbers.sort((a,b)=>a-b);
 }
 
 function extractNumbersNearArc(text, arcType) {
@@ -1206,7 +1200,7 @@ function executeVoiceCommand() {
   pendingVoiceActions = null;
 }
 
-// Atajo de teclado Ctrl+M
+// Atajo Ctrl+M
 document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.key === 'm') {
     e.preventDefault();
