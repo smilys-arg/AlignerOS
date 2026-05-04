@@ -980,10 +980,10 @@ const voiceStageMap = {
   'corté':2, 'cortar':2, 'corte':2, 'cortando':2,
   'pulí':2, 'pulir':2, 'pulido':2, 'puliendo':2,
   'corté y pulí':2, 'corte y pulido':2,
-  'listo':3, 'prepare':3, 'preparado':3, 'envio':3, 'enviado':3, 'envié':3,
+  'listo':3, 'prepare':3, 'preparado':3, 'preparados':3, 'termindos':3, 'termine':3,
   'lo mandé':3, 'los mandé':3, 'mandar':3, 'mandé':3,
-  'entregué':4, 'entregar':4, 'entregado':4, 'entregue':4, 'finalicé':4,
-  'finalizar':4, 'finalizado':4, 'finalice':4, 'listo':4, 'terminé':4
+  'entregué':4, 'entregar':4, 'entregado':4, 'entregados':4, 'finalicé':4,
+  'finalizar':4, 'finalizado':4, 'finalice':4
 };
 
 // Palabras numéricas (hasta 99)
