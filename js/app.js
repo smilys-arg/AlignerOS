@@ -446,38 +446,52 @@ function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
   stageIdx = parseInt(stageIdx, 10);
   const selector = document.getElementById(`ksel-${cardId}`);
   if (!selector) return;
-  
+
   // Si ya está abierto, cerrarlo (alternar)
   if (selector.classList.contains('open')) {
     selector.classList.remove('open');
     return;
   }
-  
+
   // Cerrar cualquier otro selector abierto
   document.querySelectorAll('.kanban-alin-selector.open').forEach(s => s.classList.remove('open'));
-  
+
   const c = state.cases.find(x => x.id === caseId);
   if (!c) return;
   const arc = c.arcadas[arcType];
   if (!arc) return;
-  
+
   // Llenar chips con los alineadores de la etapa actual
   const indices = [];
   arc.alinStates.forEach((st, i) => { if (st === stageIdx) indices.push(i); });
-  
+
   const grid = document.getElementById(`ksel-grid-${cardId}`);
   grid.innerHTML = indices.map(i =>
     `<span class="kanban-alin-item" data-idx="${i}" onclick="event.stopPropagation(); this.classList.toggle('selected')">${i}</span>`
   ).join('');
-  
-  selector.classList.add('open');
+
+  // Pequeña demora antes de abrir para asegurar que el clic actual no lo cierre
+  setTimeout(() => {
+    selector.classList.add('open');
+  }, 50);
 }
 
-// Cerrar selectores del kanban cuando se hace clic fuera
+// Cerrar selectores del kanban al hacer clic fuera
 document.addEventListener('click', function(e) {
-  if (!e.target.closest('.kanban-alin-selector') && !e.target.closest('.quick-btns')) {
-    document.querySelectorAll('.kanban-alin-selector.open').forEach(s => s.classList.remove('open'));
-  }
+  // Si el clic fue dentro de un selector abierto, no hacer nada
+  if (e.target.closest('.kanban-alin-selector.open')) return;
+  // Si el clic fue en el botón "Seleccionar" o en el área de botones, no cerrar
+  if (e.target.closest('.quick-btns')) return;
+
+  // Retraso breve para evitar cierre por el mismo clic que abrió el selector
+  setTimeout(() => {
+    document.querySelectorAll('.kanban-alin-selector.open').forEach(s => {
+      // Solo cerrar si sigue abierto después del retraso
+      if (s.classList.contains('open')) {
+        s.classList.remove('open');
+      }
+    });
+  }, 100);
 });
 
 function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
