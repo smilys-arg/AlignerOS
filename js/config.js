@@ -1,16 +1,4 @@
 // ==================== FIREBASE ====================
-firebase.auth().onAuthStateChanged(user => {
-  if (!user) {
-    // Mostrá un login en lugar de la app
-    document.body.innerHTML = `<div style="...">Iniciá sesión</div>`;
-    firebase.auth().signInWithPopup(new firebase.auth.GoogleAuthProvider());
-  } else {
-    loadState();
-    renderAll();
-    setupFirebaseListener();
-  }
-});
-
 const firebaseConfig = {
   apiKey: "AIzaSyCSsY1tA5AFzIVj-Tbg-XjxoKY73W0YPZs",
   authDomain: "alingneros.firebaseapp.com",
