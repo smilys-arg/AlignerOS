@@ -1233,9 +1233,10 @@ function showToast(msg) {
 // ==================== INICIAR ====================
 document.getElementById('bn-kanban').classList.add('active');
 
+const mainOriginalHTML = document.querySelector('main').innerHTML;
+
 firebase.auth().onAuthStateChanged(user => {
   if (!user) {
-    // Usuario no logueado: mostrar pantalla de login
     document.querySelector('main').innerHTML = `
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:16px">
         <div style="font-size:32px">⬣</div>
@@ -1246,7 +1247,9 @@ firebase.auth().onAuthStateChanged(user => {
         </button>
       </div>`;
   } else {
-    // Usuario logueado: arrancar la app normalmente
+    // Restaurar el HTML original antes de arrancar
+    document.querySelector('main').innerHTML = mainOriginalHTML;
+    document.getElementById('bn-kanban').classList.add('active');
     loadState();
     renderAll();
     setupFirebaseListener();
