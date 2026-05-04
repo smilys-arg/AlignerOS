@@ -357,10 +357,10 @@ function renderStats() {
     <div class="stat-card"><div class="stat-label">Urgentes</div><div class="stat-value ${urg>0?'urgent':''}">${urg}</div></div>
     <div class="stat-card"><div class="stat-label">Próximos</div><div class="stat-value ${prox>0?'warning':''}">${prox}</div></div>
     <div class="stat-card"><div class="stat-label">Casos</div><div class="stat-value">${state.cases.length}</div></div>
-    <div class="stat-card"><div class="stat-label">Impresión</div><div class="stat-value" style="color:var(--sp)">${cnt[0]}</div></div>
+    <div class="stat-card"><div class="stat-label">Imprimir</div><div class="stat-value" style="color:var(--sp)">${cnt[0]}</div></div>
     <div class="stat-card"><div class="stat-label">Termo.</div><div class="stat-value" style="color:var(--st)">${cnt[1]}</div></div>
     <div class="stat-card"><div class="stat-label">Corte/Pul</div><div class="stat-value" style="color:var(--sc)">${cnt[2]}</div></div>
-    <div class="stat-card"><div class="stat-label">Envío</div><div class="stat-value" style="color:var(--senv)">${cnt[3]}</div></div>`;
+    <div class="stat-card"><div class="stat-label">Listo</div><div class="stat-value" style="color:var(--senv)">${cnt[3]}</div></div>`;
 }
 
 function renderAlerts() {
@@ -425,8 +425,8 @@ function renderKanban() {
     </div>
     <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
     <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
-    <option value="0">Impresión</option><option value="1">Termoformado</option>
-    <option value="2">Corte/Pulido</option><option value="3">Envío</option>
+    <option value="0">Imprimir</option><option value="1">Termoformar</option>
+    <option value="2">Corte/Pulido</option><option value="3">Listo</option>
     <option value="4">Finalizado</option>
   </select>
   <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="event.stopPropagation(); moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Mover</button>
