@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="AlignerOS">
 <meta name="theme-color" content="#2563eb">
-<title>AlignerOS · Lab</title>
+<title>Aligners-OS · Lab</title>
 <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cpolygon points='256,32 464,160 464,352 256,480 48,352 48,160' fill='%232563eb'/%3E%3Ctext x='256' y='300' text-anchor='middle' font-family='Inter,sans-serif' font-weight='bold' font-size='140' fill='white'%3EOS%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="css/styles.css">
 </head>
@@ -16,15 +16,17 @@
 
 <header>
   <button class="btn-undo" id="btnUndo" disabled onclick="undo()" title="Deshacer (Ctrl+Z)">↩ Deshacer</button>
-  <div class="logo">AlignerOS</div>
+  <div class="logo">Aligners-OS</div>
   <nav class="desktop-nav">
     <button class="tab active" onclick="switchView('kanban',this)">Producción</button>
     <button class="tab" onclick="switchView('casos',this)">Casos</button>
     <button class="tab" onclick="switchView('stock',this)">Stock</button>
     <button class="tab" onclick="switchView('tareas',this)">Tareas</button>
+    <button class="tab" onclick="switchView('finanzas',this)">Finanzas</button>
   </nav>
   <div class="header-right">
     <button class="activity-btn" onclick="openActivityModal()" title="Registro de actividad">📋<span class="activity-badge" id="activityBadge" style="display:none">0</span></button>
+    <button class="bnav-item" id="bn-finanzas" onclick="switchView('finanzas',this)"><span class="bnav-icon">💰</span><span>Finanzas</span></button>
     <div class="sync-indicator" id="syncIndicator" onclick="syncFromFirebase()" title="Tocar para sincronizar">
       <span class="sync-dot offline" id="syncDot"></span>
       <span id="syncText">Offline</span>
@@ -34,6 +36,22 @@
   </div>
 </header>
 
+<div id="view-finanzas" style="display:none">
+  <div class="section-header">
+    <span class="section-title">Finanzas</span>
+    <button class="btn-new" style="display:flex" onclick="openFinanzaModal()">+ Nuevo registro</button>
+  </div>
+  <div class="filters-row">
+    <button class="filter-btn active" onclick="setFinanzasFilter('all',this)">Todos</button>
+    <button class="filter-btn" onclick="setFinanzasFilter('pendiente',this)">Pendientes</button>
+    <button class="filter-btn" onclick="setFinanzasFilter('completo',this)">Completos</button>
+    <input class="filter-input" type="text" id="finanzaPacienteFilter" placeholder="Paciente..." oninput="filterFinanzas()">
+    <input class="filter-input" type="month" id="finanzaMesFilter" onchange="filterFinanzas()" style="width:130px">
+  </div>
+  <div class="finanzas-resumen" id="finanzasResumen"></div>
+  <div class="finanzas-list" id="finanzasList"></div>
+</div>
+  
 <main>
   <div class="stats-grid" id="statsGrid"></div>
   <div class="progress-bar-container" id="progressBarContainer"></div>
@@ -172,6 +190,42 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+  <!-- Modal Finanza -->
+<div class="modal-overlay" id="finanzaModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('finanzaModal')">&times;</button>
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="finanzaModalTitle">Nuevo registro</div>
+    <div class="form-grid">
+      <div class="form-group full">
+        <label class="form-label">Paciente / Caso</label>
+        <select class="form-input" id="ff-case"></select>
+      </div>
+      <div class="form-group"><label class="form-label">Monto total</label><input class="form-input" id="ff-monto" type="number" step="0.01"></div>
+      <div class="form-group"><label class="form-label">Fecha entrega</label><input class="form-input" id="ff-fecha" type="date"></div>
+      <div class="form-group full"><label class="form-label">Notas</label><input class="form-input" id="ff-notas"></div>
+    </div>
+    <div class="form-actions"><button class="btn-cancel" onclick="closeModal('finanzaModal')">Cancelar</button><button class="btn-submit" id="finanzaSubmitBtn" onclick="submitFinanza()">Guardar</button></div>
+  </div>
+</div>
+
+<!-- Modal Pago -->
+<div class="modal-overlay" id="pagoModal">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal('pagoModal')">&times;</button>
+    <div class="modal-handle"></div>
+    <div class="modal-title">Registrar pago</div>
+    <div class="form-grid">
+      <div class="form-group full"><label class="form-label">Caso</label><div id="fp-caso" style="padding:10px;background:var(--surface2);border-radius:6px;font-weight:500"></div></div>
+      <div class="form-group"><label class="form-label">Monto</label><input class="form-input" id="fp-monto" type="number" step="0.01"></div>
+      <div class="form-group"><label class="form-label">Fecha</label><input class="form-input" id="fp-fecha" type="date"></div>
+      <div class="form-group full"><label class="form-label">Método</label><select class="form-input" id="fp-metodo"><option>Efectivo</option><option>Transferencia</option><option>Tarjeta</option><option>Otro</option></select></div>
+      <div class="form-group full"><label class="form-label">Notas</label><input class="form-input" id="fp-notas"></div>
+    </div>
+    <div class="form-actions"><button class="btn-cancel" onclick="closeModal('pagoModal')">Cancelar</button><button class="btn-submit" onclick="confirmarPago()">Registrar</button></div>
+  </div>
+</div>
 
 <!-- Firebase SDK -->
 <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
