@@ -185,8 +185,8 @@ function loadState(){
       if (data.cases && data.stock) {
         state.cases = data.cases;
         state.stock = data.stock;
-        state.lastModified = data.lastModified || 0;
         state.finanzas = data.finanzas || [];
+        state.lastModified = data.lastModified || 0;
         return;
       }
     }
