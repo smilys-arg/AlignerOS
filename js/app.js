@@ -60,8 +60,8 @@ const activityLog = [];
 // ==================== FUNCIONES AUXILIARES ====================
 function daysFromNow(d){ const dt=new Date(); dt.setDate(dt.getDate()+d); return dt.toISOString().slice(0,10); }
 function makeArc(t){ return t ? { total:t, alinStates:new Array(t).fill(-1) } : null; }
-function makeCase(patient,doctor,doctorId,sup,inf,delivery,obs){
-  return { id:uid(), patient, doctor, doctorId:doctorId||'', delivery, obs, arcadas:{sup:makeArc(sup), inf:makeArc(inf)}, open:false };
+function makeCase(patient,doctor,doctorId,sup,inf,delivery,ingreso,egreso,obs){
+  return { id:uid(), patient, doctor, doctorId:doctorId||'', delivery, montoTotal: parseFloat(ingreso) || 0, egreso: parseFloat(egreso) || 0, obs, arcadas:{sup:makeArc(sup), inf:makeArc(inf)}, open:false };
 }
 function getPrio(d){ const t=new Date(); t.setHours(0,0,0,0); const diff=Math.ceil((new Date(d+'T00:00:00')-t)/86400000); return diff<=2?'urgente':diff<=5?'proximo':'ok'; }
 function daysUntil(d){ const t=new Date(); t.setHours(0,0,0,0); return Math.ceil((new Date(d+'T00:00:00')-t)/86400000); }
@@ -678,6 +678,8 @@ function openNewCase() {
   document.getElementById('caseSubmitBtn').textContent = 'Crear';
   ['f-patient','f-doctor','f-doctorId','f-sup','f-inf','f-obs'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('f-date').value = daysFromNow(7);
+  document.getElementById('f-ingreso').value = '';
+  document.getElementById('f-egreso').value = '';
   openModal('newCaseModal');
 }
 function submitNewCase() {
@@ -687,6 +689,8 @@ function submitNewCase() {
   const s = parseInt(document.getElementById('f-sup').value) || 0;
   const inf = parseInt(document.getElementById('f-inf').value) || 0;
   const d = document.getElementById('f-date').value;
+  const ingreso = parseFloat(document.getElementById('f-ingreso')?.value) || 0;
+  const egreso = parseFloat(document.getElementById('f-egreso')?.value) || 0;
   const ob = document.getElementById('f-obs').value.trim();
   if(!p || !dr || !d) { alert('Completá paciente, doctor y fecha'); return; }
   pushUndo();
@@ -698,10 +702,12 @@ function submitNewCase() {
       else c.arcadas.sup = null;
       if(inf>0) { if(!c.arcadas.inf) c.arcadas.inf = makeArc(inf); else c.arcadas.inf.total = inf; }
       else c.arcadas.inf = null;
+      c.montoTotal = ingreso;
+      c.egreso = egreso;
     }
     addActivity(`✎ Caso editado: ${p}`);
   } else {
-    state.cases.unshift(makeCase(p,dr,did,s,inf,d,ob));
+    state.cases.unshift(makeCase(p,dr,did,s,inf,d,ingreso,egreso,ob));
     addActivity(`➕ Nuevo caso: ${p}`);
   }
   closeModal('newCaseModal');
@@ -720,6 +726,8 @@ function editCase(id) {
   document.getElementById('f-sup').value = c.arcadas.sup?.total || '';
   document.getElementById('f-inf').value = c.arcadas.inf?.total || '';
   document.getElementById('f-date').value = c.delivery;
+  document.getElementById('f-ingreso').value = c.montoTotal || '';
+  document.getElementById('f-egreso').value = c.egreso || '';
   document.getElementById('f-obs').value = c.obs || '';
   openModal('newCaseModal');
 }
@@ -1234,12 +1242,40 @@ function filterFinanzas() {
 }
 
 function renderFinanzas() {
+  // Solo renderizar si la vista está activa
   if (document.getElementById('view-finanzas').style.display === 'none') return;
 
+  // ---- Obtener datos desde los casos ----
+  const finanzasDesdeCasos = state.cases
+    .filter(c => (c.montoTotal || 0) > 0 || (c.egreso || 0) > 0)
+    .map(c => {
+      // Si existe un registro financiero manual para este caso, usar sus pagos/egresos reales
+      const manual = state.finanzas.find(f => f.caseId === c.id);
+      return {
+        id: c.id,
+        caseId: c.id,
+        patient: c.patient,
+        doctorId: c.doctorId,
+        montoTotal: c.montoTotal || 0,
+        egreso: c.egreso || 0,
+        pagos: manual ? (manual.pagos || []) : [],
+        egresos: manual ? (manual.egresos || []) : [],
+        fechaEntrega: c.delivery,
+        notas: c.obs || ''
+      };
+    });
+
+  // ---- Registros manuales (sin duplicar) ----
+  const caseIdsConFinanzas = finanzasDesdeCasos.map(f => f.caseId);
+  const finanzasManuales = state.finanzas.filter(f => !caseIdsConFinanzas.includes(f.caseId));
+
+  let lista = [...finanzasDesdeCasos, ...finanzasManuales];
+
+  // ---- Aplicar filtros ----
   const pacienteFiltro = state.finanzaPacienteFilter.toLowerCase();
   const mesFiltro = state.finanzaMesFilter;
 
-  let lista = state.finanzas.filter(f => {
+  lista = lista.filter(f => {
     if (pacienteFiltro && !f.patient.toLowerCase().includes(pacienteFiltro)) return false;
     if (mesFiltro) {
       if (!f.fechaEntrega) return false;
@@ -1252,30 +1288,35 @@ function renderFinanzas() {
 
   if (state.finanzasFilter === 'pendiente') {
     lista = lista.filter(f => {
-      const pagado = f.pagos.reduce((s,p) => s + p.monto, 0);
+      const pagado = f.pagos.reduce((s, p) => s + p.monto, 0);
       return pagado < f.montoTotal;
     });
   } else if (state.finanzasFilter === 'completo') {
     lista = lista.filter(f => {
-      const pagado = f.pagos.reduce((s,p) => s + p.monto, 0);
+      const pagado = f.pagos.reduce((s, p) => s + p.monto, 0);
       return pagado >= f.montoTotal;
     });
   }
 
-  let totalCobrar = 0, totalCobrado = 0, pendientes = 0;
+  // ---- Calcular totales globales ----
+  let totalCobrar = 0, totalCobrado = 0, totalEgresos = 0, pendientes = 0;
   state.finanzas.forEach(f => {
     totalCobrar += f.montoTotal;
     const pagado = f.pagos.reduce((s, p) => s + p.monto, 0);
     totalCobrado += pagado;
+    if (f.egresos) totalEgresos += f.egresos.reduce((s, e) => s + e.monto, 0);
     if (pagado < f.montoTotal) pendientes++;
   });
-
-  let totalEgresos = 0;
-  state.finanzas.forEach(f => {
-    if (f.egresos) totalEgresos += f.egresos.reduce((s, e) => s + e.monto, 0);
+  // Incluir también los casos que no están en state.finanzas
+  finanzasDesdeCasos.forEach(f => {
+    if (!state.finanzas.some(x => x.caseId === f.caseId)) {
+      totalCobrar += f.montoTotal;
+      // No tienen pagos reales, se asume 0 cobrado y 0 egresos adicionales
+    }
   });
   const balance = totalCobrado - totalEgresos;
 
+  // ---- Renderizar resumen ----
   document.getElementById('finanzasResumen').innerHTML = `
     <div class="stat-card"><div class="stat-label">Total a cobrar</div><div class="stat-value" style="color:var(--accent)">$${totalCobrar.toFixed(0)}</div></div>
     <div class="stat-card"><div class="stat-label">Total cobrado</div><div class="stat-value" style="color:var(--green)">$${totalCobrado.toFixed(0)}</div></div>
@@ -1285,6 +1326,7 @@ function renderFinanzas() {
     <div class="stat-card"><div class="stat-label">Balance</div><div class="stat-value" style="color:${balance >= 0 ? 'var(--green)' : 'var(--red)'}">$${balance.toFixed(0)}</div></div>
   `;
 
+  // ---- Renderizar lista de tarjetas ----
   document.getElementById('finanzasList').innerHTML = lista.map(f => {
     const pagado = f.pagos.reduce((s, p) => s + p.monto, 0);
     const restante = f.montoTotal - pagado;
@@ -1301,20 +1343,21 @@ function renderFinanzas() {
         <span>Total: <strong>$${f.montoTotal.toFixed(2)}</strong></span>
         <span>Cobrado: <strong>$${pagado.toFixed(2)}</strong></span>
         <span>Resta: <strong>$${restante.toFixed(2)}</strong></span>
+        ${f.egreso ? `<span>Egreso base: <strong>$${f.egreso.toFixed(2)}</strong></span>` : ''}
       </div>
       ${f.fechaEntrega ? `<div style="font-size:11px;color:var(--text3)">Entrega: ${f.fechaEntrega}</div>` : ''}
       <div class="finanza-pagos">
-        ${f.pagos.map(p => `<div class="finanza-pago-item"><span>${p.fecha} · ${p.metodo}</span><span>$${p.monto.toFixed(2)}</span></div>`).join('')}
+        ${f.pagos.map(p => `<div class="finanza-pago-item"><span>${p.fecha} · ${p.metodo}</span><span>+ $${p.monto.toFixed(2)}</span></div>`).join('')}
       </div>
       <div class="finanza-egresos" style="margin-top:6px">
-        ${f.egresos && f.egresos.length > 0 ? '<div style="font-size:10px;color:var(--text3);margin-bottom:4px">Egresos:</div>' : ''}
+        ${f.egresos && f.egresos.length > 0 ? '<div style="font-size:10px;color:var(--text3);margin-bottom:4px">Egresos adicionales:</div>' : ''}
         ${(f.egresos || []).map(e => `
           <div class="finanza-pago-item" style="color:var(--red)">
             <span>${e.fecha} · ${e.concepto || 'Gasto'}</span>
             <span>- $${e.monto.toFixed(2)}</span>
+          </div>
+        `).join('')}
       </div>
-  `).join('')}
-</div>
       <div class="finanza-actions">
         <button class="qbtn" onclick="registrarPago('${f.id}')">+ Pago</button>
         <button class="qbtn" style="color:var(--red)" onclick="registrarEgreso('${f.id}')">- Egreso</button>
