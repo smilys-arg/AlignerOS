@@ -105,7 +105,7 @@ function adjustStockOnStageChange(arc, idx, oldStage, newStage) {
 
 // ==================== ESTADO ====================
 const state = {
-  cases: [], stock: [], lastModified: 0,
+  cases: [], stock: [], finanzas: [], lastModified: 0,
   kFilter: 'all', cFilter: 'all',
   patientFilter: '', doctorFilter: ''
 };
@@ -186,6 +186,7 @@ function loadState(){
         state.cases = data.cases;
         state.stock = data.stock;
         state.lastModified = data.lastModified || 0;
+        state.finanzas = data.finanzas || [];
         return;
       }
     }
@@ -203,7 +204,7 @@ function loadState(){
 
 function saveState(){
   try {
-    const data = { cases: state.cases, stock: state.stock, lastModified: state.lastModified };
+    const data = { cases: state.cases, stock: state.stock, finanzas: state.finanzas, lastModified: state.lastModified };
     localStorage.setItem(LS_KEY, JSON.stringify(data));
     if (db && isOnline && !writeLock) {
       writeLock = true;
@@ -1414,6 +1415,7 @@ function switchView(v, el) {
   if(el) el.classList.add('active');
   ['kanban','casos','stock','tareas'].forEach(x => document.getElementById('view-'+x).style.display = x===v ? '' : 'none');
   if (v === 'tareas') renderDailyTasks();
+  if (v === 'finanzas') renderFinanzas();
 }
 function setFilter(f, el) { state.kFilter=f; document.querySelectorAll('#view-kanban .filter-btn').forEach(b=>b.classList.remove('active')); el.classList.add('active'); renderKanban(); }
 function setCasosFilter(f, el) { state.cFilter=f; document.querySelectorAll('#view-casos .filter-btn').forEach(b=>b.classList.remove('active')); el.classList.add('active'); renderCases(); }
