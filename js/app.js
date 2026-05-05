@@ -1285,7 +1285,7 @@ function renderFinanzas() {
 
     return `<div class="finanza-card">
       <div class="finanza-header">
-        <span class="finanza-paciente">${f.patient}</span>
+        <span class="finanza-paciente">${f.doctorId ? f.doctorId + ' · ' : ''}${f.patient}</span>
         <span class="finanza-estado ${estado}">${estado.toUpperCase()}</span>
       </div>
       <div class="finanza-montos">
@@ -1321,8 +1321,7 @@ function proximosVencimientos() {
 function openFinanzaModal(id = null) {
   const select = document.getElementById('ff-case');
   select.innerHTML = '<option value="">Seleccionar caso...</option>' +
-    state.cases.map(c => `<option value="${c.id}">${c.patient}</option>`).join('');
-
+  state.cases.map(c => `<option value="${c.id}">${c.doctorId || 'SIN'} · ${c.patient} (Caso #${c.doctorId?.slice(2) || '?'})</option>`).join('');
   if (id) {
     const f = state.finanzas.find(x => x.id === id);
     if (!f) return;
@@ -1348,6 +1347,8 @@ function openFinanzaModal(id = null) {
 function submitFinanza() {
   const caseId = document.getElementById('ff-case').value;
   const patient = state.cases.find(c => c.id === caseId)?.patient || 'Sin caso';
+  const caso = state.cases.find(c => c.id === caseId);
+  const doctorId = caso?.doctorId || '';
   const montoTotal = parseFloat(document.getElementById('ff-monto').value) || 0;
   const fechaEntrega = document.getElementById('ff-fecha').value;
   const notas = document.getElementById('ff-notas').value.trim();
