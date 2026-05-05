@@ -1416,7 +1416,7 @@ function confirmarPago() {
 function switchView(v, el) {
   document.querySelectorAll('.desktop-nav .tab, .bnav-item').forEach(b => b.classList.remove('active'));
   if(el) el.classList.add('active');
-  ['kanban','casos','stock','tareas'].forEach(x => document.getElementById('view-'+x).style.display = x===v ? '' : 'none');
+  ['kanban','casos','stock','tareas','finanzas'].forEach(x => document.getElementById('view-'+x).style.display = x===v ? '' : 'none');
   if (v === 'tareas') renderDailyTasks();
   if (v === 'finanzas') renderFinanzas();
 }
