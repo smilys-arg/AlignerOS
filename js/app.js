@@ -49,6 +49,8 @@ setInterval(checkUrgentNotifications, 3600000); // cada hora
 // ==================== VARIABLES GLOBALES ====================
 let repCtx = null, editingCaseId = null, editingStockId = null;
 let selection = { caseId:null, arcType:null, indices:new Set() };
+let editingFinanzaId = null;
+let pagoFinanzaId = null;
 
 // Historial de deshacer y actividad
 const undoStack = [];
@@ -312,6 +314,7 @@ function renderAll() {
   renderCases();
   renderStock();
   saveState();
+  renderFinanzas();
 }
 const render = renderAll;
 
