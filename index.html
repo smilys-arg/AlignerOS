@@ -26,7 +26,6 @@
   </nav>
   <div class="header-right">
     <button class="activity-btn" onclick="openActivityModal()" title="Registro de actividad">📋<span class="activity-badge" id="activityBadge" style="display:none">0</span></button>
-    <button class="bnav-item" id="bn-finanzas" onclick="switchView('finanzas',this)"><span class="bnav-icon">💰</span><span>Finanzas</span></button>
     <div class="sync-indicator" id="syncIndicator" onclick="syncFromFirebase()" title="Tocar para sincronizar">
       <span class="sync-dot offline" id="syncDot"></span>
       <span id="syncText">Offline</span>
@@ -105,6 +104,7 @@
     <button class="bnav-item" id="bn-casos" onclick="switchView('casos',this)"><span class="bnav-icon">⧉</span><span>Casos</span></button>
     <button class="bnav-item" id="bn-stock" onclick="switchView('stock',this)"><span class="bnav-icon">◈</span><span>Stock</span></button>
     <button class="bnav-item" id="bn-tareas" onclick="switchView('tareas',this)"><span class="bnav-icon">📋</span><span>Tareas</span></button>
+    <button class="bnav-item" id="bn-finanzas" onclick="switchView('finanzas',this)"><span class="bnav-icon">💰</span><span>Finanzas</span></button>  
   </div>
 </nav>
 <button class="fab" onclick="openNewCase()">+</button>
