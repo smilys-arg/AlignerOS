@@ -239,20 +239,62 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 .task-badge.warning { background: rgba(202,138,4,.1); color: var(--yellow); }
 .time-estimate { font-size: 11px; color: var(--text3); margin-top: 4px; }
 
-.finanzas-resumen { display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:10px; margin-bottom:18px; }
-.finanzas-list { display:flex; flex-direction:column; gap:10px; }
-.finanza-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; box-shadow:var(--shadow-sm); }
-.finanza-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
-.finanza-paciente { font-weight:600; font-size:14px; }
-.finanza-estado { font-size:11px; padding:4px 10px; border-radius:12px; font-weight:600; }
-.finanza-estado.pendiente { background:rgba(220,38,38,.1); color:var(--red); }
-.finanza-estado.parcial { background:rgba(202,138,4,.1); color:var(--yellow); }
-.finanza-estado.completo { background:rgba(22,163,74,.1); color:var(--green); }
-.finanza-montos { display:flex; justify-content:space-between; font-size:13px; color:var(--text2); margin-bottom:6px; }
-.finanza-montos strong { color:var(--text); }
-.finanza-pagos { font-size:11px; color:var(--text3); margin-top:8px; }
-.finanza-pago-item { display:flex; justify-content:space-between; padding:4px 0; border-bottom:1px dotted var(--border); }
-.finanza-actions { display:flex; gap:6px; margin-top:10px; }
+/* ── Finanzas ── */
+.finanzas-resumen {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.finanzas-resumen .stat-card .stat-value { font-size: 20px; }
+.finanzas-list { display: flex; flex-direction: column; gap: 10px; }
+.finanza-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-sm);
+}
+.finanza-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.finanza-paciente { font-weight: 600; font-size: 14px; }
+.finanza-estado {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+}
+.finanza-estado.pendiente { background: rgba(220,38,38,.1); color: var(--red); }
+.finanza-estado.parcial { background: rgba(202,138,4,.1); color: var(--yellow); }
+.finanza-estado.completo { background: rgba(22,163,74,.1); color: var(--green); }
+.finanza-montos {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--text2);
+  margin-bottom: 6px;
+}
+.finanza-montos strong { color: var(--text); }
+.finanza-pagos {
+  font-size: 11px;
+  color: var(--text3);
+  margin-top: 8px;
+}
+.finanza-pago-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--border);
+}
+.finanza-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
 
 @media(min-width:768px){main{padding:24px;padding-bottom:24px}.stats-grid{grid-template-columns:repeat(7,1fr)}.case-days{display:block}}
 @media(min-width:1024px){.desktop-nav{display:flex}.bottom-nav{display:none!important}.fab{display:none!important}.btn-new{display:flex}.date-chip{display:block}.kanban{min-width:unset;grid-template-columns:repeat(4,1fr)}.kanban-wrap{overflow-x:visible;margin:0;padding:0}.modal{border-radius:12px;padding:24px}.modal-overlay{align-items:center}}
