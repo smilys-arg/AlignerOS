@@ -1210,6 +1210,204 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// ==================== FINANZAS ====================
+state.finanzasFilter = 'all';
+state.finanzaPacienteFilter = '';
+state.finanzaMesFilter = '';
+
+function setFinanzasFilter(f, el) {
+  state.finanzasFilter = f;
+  document.querySelectorAll('#view-finanzas .filters-row .filter-btn').forEach(b => b.classList.remove('active'));
+  if (el) el.classList.add('active');
+  renderFinanzas();
+}
+
+function filterFinanzas() {
+  state.finanzaPacienteFilter = document.getElementById('finanzaPacienteFilter').value;
+  state.finanzaMesFilter = document.getElementById('finanzaMesFilter').value;
+  renderFinanzas();
+}
+
+function renderFinanzas() {
+  if (document.getElementById('view-finanzas').style.display === 'none') return;
+
+  const pacienteFiltro = state.finanzaPacienteFilter.toLowerCase();
+  const mesFiltro = state.finanzaMesFilter;
+
+  let lista = state.finanzas.filter(f => {
+    if (pacienteFiltro && !f.patient.toLowerCase().includes(pacienteFiltro)) return false;
+    if (mesFiltro) {
+      if (!f.fechaEntrega) return false;
+      const fecha = new Date(f.fechaEntrega + 'T00:00:00');
+      const mesRegistro = `${fecha.getFullYear()}-${String(fecha.getMonth()+1).padStart(2,'0')}`;
+      if (mesRegistro !== mesFiltro) return false;
+    }
+    return true;
+  });
+
+  if (state.finanzasFilter === 'pendiente') {
+    lista = lista.filter(f => {
+      const pagado = f.pagos.reduce((s,p) => s + p.monto, 0);
+      return pagado < f.montoTotal;
+    });
+  } else if (state.finanzasFilter === 'completo') {
+    lista = lista.filter(f => {
+      const pagado = f.pagos.reduce((s,p) => s + p.monto, 0);
+      return pagado >= f.montoTotal;
+    });
+  }
+
+  let totalCobrar = 0, totalCobrado = 0, pendientes = 0;
+  state.finanzas.forEach(f => {
+    totalCobrar += f.montoTotal;
+    const pagado = f.pagos.reduce((s, p) => s + p.monto, 0);
+    totalCobrado += pagado;
+    if (pagado < f.montoTotal) pendientes++;
+  });
+
+  document.getElementById('finanzasResumen').innerHTML = `
+    <div class="stat-card"><div class="stat-label">Total a cobrar</div><div class="stat-value" style="color:var(--accent)">$${totalCobrar.toFixed(0)}</div></div>
+    <div class="stat-card"><div class="stat-label">Total cobrado</div><div class="stat-value" style="color:var(--green)">$${totalCobrado.toFixed(0)}</div></div>
+    <div class="stat-card"><div class="stat-label">Pendientes</div><div class="stat-value" style="color:var(--red)">${pendientes}</div></div>
+    <div class="stat-card"><div class="stat-label">Próx. venc.</div><div class="stat-value" style="color:var(--yellow)">${proximosVencimientos()}</div></div>
+  `;
+
+  document.getElementById('finanzasList').innerHTML = lista.map(f => {
+    const pagado = f.pagos.reduce((s, p) => s + p.monto, 0);
+    const restante = f.montoTotal - pagado;
+    let estado = 'pendiente';
+    if (pagado >= f.montoTotal) estado = 'completo';
+    else if (pagado > 0) estado = 'parcial';
+
+    return `<div class="finanza-card">
+      <div class="finanza-header">
+        <span class="finanza-paciente">${f.patient}</span>
+        <span class="finanza-estado ${estado}">${estado.toUpperCase()}</span>
+      </div>
+      <div class="finanza-montos">
+        <span>Total: <strong>$${f.montoTotal.toFixed(2)}</strong></span>
+        <span>Cobrado: <strong>$${pagado.toFixed(2)}</strong></span>
+        <span>Resta: <strong>$${restante.toFixed(2)}</strong></span>
+      </div>
+      ${f.fechaEntrega ? `<div style="font-size:11px;color:var(--text3)">Entrega: ${f.fechaEntrega}</div>` : ''}
+      <div class="finanza-pagos">
+        ${f.pagos.map(p => `<div class="finanza-pago-item"><span>${p.fecha} · ${p.metodo}</span><span>$${p.monto.toFixed(2)}</span></div>`).join('')}
+      </div>
+      <div class="finanza-actions">
+        <button class="qbtn" onclick="registrarPago('${f.id}')">+ Pago</button>
+        <button class="qbtn" onclick="editarFinanza('${f.id}')">✎</button>
+        <button class="qbtn" style="color:var(--red)" onclick="eliminarFinanza('${f.id}')">🗑</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function proximosVencimientos() {
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  let count = 0;
+  state.finanzas.forEach(f => {
+    if (!f.fechaEntrega) return;
+    const fecha = new Date(f.fechaEntrega + 'T00:00:00');
+    const diff = Math.ceil((fecha - hoy) / 86400000);
+    if (diff >= 0 && diff <= 7) count++;
+  });
+  return count;
+}
+
+function openFinanzaModal(id = null) {
+  const select = document.getElementById('ff-case');
+  select.innerHTML = '<option value="">Seleccionar caso...</option>' +
+    state.cases.map(c => `<option value="${c.id}">${c.patient}</option>`).join('');
+
+  if (id) {
+    const f = state.finanzas.find(x => x.id === id);
+    if (!f) return;
+    editingFinanzaId = id;
+    document.getElementById('finanzaModalTitle').textContent = 'Editar registro';
+    document.getElementById('finanzaSubmitBtn').textContent = 'Guardar cambios';
+    document.getElementById('ff-case').value = f.caseId || '';
+    document.getElementById('ff-monto').value = f.montoTotal;
+    document.getElementById('ff-fecha').value = f.fechaEntrega || '';
+    document.getElementById('ff-notas').value = f.notas || '';
+  } else {
+    editingFinanzaId = null;
+    document.getElementById('finanzaModalTitle').textContent = 'Nuevo registro';
+    document.getElementById('finanzaSubmitBtn').textContent = 'Guardar';
+    document.getElementById('ff-case').value = '';
+    document.getElementById('ff-monto').value = '';
+    document.getElementById('ff-fecha').value = '';
+    document.getElementById('ff-notas').value = '';
+  }
+  openModal('finanzaModal');
+}
+
+function submitFinanza() {
+  const caseId = document.getElementById('ff-case').value;
+  const patient = state.cases.find(c => c.id === caseId)?.patient || 'Sin caso';
+  const montoTotal = parseFloat(document.getElementById('ff-monto').value) || 0;
+  const fechaEntrega = document.getElementById('ff-fecha').value;
+  const notas = document.getElementById('ff-notas').value.trim();
+
+  if (editingFinanzaId) {
+    const f = state.finanzas.find(x => x.id === editingFinanzaId);
+    if (f) {
+      f.caseId = caseId; f.patient = patient; f.montoTotal = montoTotal;
+      f.fechaEntrega = fechaEntrega; f.notas = notas;
+    }
+    editingFinanzaId = null;
+  } else {
+    state.finanzas.push({
+      id: uid(),
+      caseId,
+      patient,
+      montoTotal,
+      pagos: [],
+      fechaEntrega,
+      notas
+    });
+  }
+  closeModal('finanzaModal');
+  renderAll();
+  showToast('Registro guardado ✓');
+}
+
+function editarFinanza(id) { openFinanzaModal(id); }
+
+function eliminarFinanza(id) {
+  if (!confirm('¿Eliminar este registro financiero?')) return;
+  state.finanzas = state.finanzas.filter(f => f.id !== id);
+  renderAll();
+  showToast('Registro eliminado');
+}
+
+function registrarPago(id) {
+  const f = state.finanzas.find(x => x.id === id);
+  if (!f) return;
+  pagoFinanzaId = id;
+  document.getElementById('fp-caso').textContent = f.patient;
+  document.getElementById('fp-monto').value = '';
+  document.getElementById('fp-fecha').value = new Date().toISOString().slice(0,10);
+  document.getElementById('fp-metodo').value = 'Efectivo';
+  document.getElementById('fp-notas').value = '';
+  openModal('pagoModal');
+}
+
+function confirmarPago() {
+  const monto = parseFloat(document.getElementById('fp-monto').value) || 0;
+  if (monto <= 0) { alert('Ingresá un monto válido'); return; }
+  const f = state.finanzas.find(x => x.id === pagoFinanzaId);
+  if (!f) return;
+  f.pagos.push({
+    fecha: document.getElementById('fp-fecha').value,
+    monto,
+    metodo: document.getElementById('fp-metodo').value,
+    notas: document.getElementById('fp-notas').value.trim()
+  });
+  closeModal('pagoModal');
+  renderAll();
+  showToast('Pago registrado ✓');
+}
+
 // ==================== NAVEGACIÓN Y MODALES ====================
 function switchView(v, el) {
   document.querySelectorAll('.desktop-nav .tab, .bnav-item').forEach(b => b.classList.remove('active'));
