@@ -51,6 +51,7 @@ let repCtx = null, editingCaseId = null, editingStockId = null;
 let selection = { caseId:null, arcType:null, indices:new Set() };
 let editingFinanzaId = null;
 let pagoFinanzaId = null;
+let modoEgreso = false;
 
 // Historial de deshacer y actividad
 const undoStack = [];
@@ -1269,6 +1270,12 @@ function renderFinanzas() {
     if (pagado < f.montoTotal) pendientes++;
   });
 
+  let totalEgresos = 0;
+  state.finanzas.forEach(f => {
+    if (f.egresos) totalEgresos += f.egresos.reduce((s, e) => s + e.monto, 0);
+  });
+  const balance = totalCobrado - totalEgresos;
+
   document.getElementById('finanzasResumen').innerHTML = `
     <div class="stat-card"><div class="stat-label">Total a cobrar</div><div class="stat-value" style="color:var(--accent)">$${totalCobrar.toFixed(0)}</div></div>
     <div class="stat-card"><div class="stat-label">Total cobrado</div><div class="stat-value" style="color:var(--green)">$${totalCobrado.toFixed(0)}</div></div>
@@ -1297,6 +1304,15 @@ function renderFinanzas() {
       <div class="finanza-pagos">
         ${f.pagos.map(p => `<div class="finanza-pago-item"><span>${p.fecha} · ${p.metodo}</span><span>$${p.monto.toFixed(2)}</span></div>`).join('')}
       </div>
+      <div class="finanza-egresos" style="margin-top:6px">
+        ${f.egresos && f.egresos.length > 0 ? '<div style="font-size:10px;color:var(--text3);margin-bottom:4px">Egresos:</div>' : ''}
+        ${(f.egresos || []).map(e => `
+          <div class="finanza-pago-item" style="color:var(--red)">
+            <span>${e.fecha} · ${e.concepto || 'Gasto'}</span>
+            <span>- $${e.monto.toFixed(2)}</span>
+      </div>
+  `).join('')}
+</div>
       <div class="finanza-actions">
         <button class="qbtn" onclick="registrarPago('${f.id}')">+ Pago</button>
         <button class="qbtn" onclick="editarFinanza('${f.id}')">✎</button>
@@ -1367,6 +1383,7 @@ function submitFinanza() {
       patient,
       montoTotal,
       pagos: [],
+      egresos: [],
       fechaEntrega,
       notas
     });
@@ -1395,6 +1412,7 @@ function registrarPago(id) {
   document.getElementById('fp-metodo').value = 'Efectivo';
   document.getElementById('fp-notas').value = '';
   openModal('pagoModal');
+  modoEgreso = false;
 }
 
 function confirmarPago() {
@@ -1402,15 +1420,41 @@ function confirmarPago() {
   if (monto <= 0) { alert('Ingresá un monto válido'); return; }
   const f = state.finanzas.find(x => x.id === pagoFinanzaId);
   if (!f) return;
-  f.pagos.push({
-    fecha: document.getElementById('fp-fecha').value,
-    monto,
-    metodo: document.getElementById('fp-metodo').value,
-    notas: document.getElementById('fp-notas').value.trim()
-  });
+
+  if (modoEgreso) {
+    f.egresos = f.egresos || [];
+    f.egresos.push({
+      fecha: document.getElementById('fp-fecha').value,
+      monto,
+      concepto: document.getElementById('fp-metodo').value,
+      notas: document.getElementById('fp-notas').value.trim()
+    });
+  } else {
+    f.pagos.push({
+      fecha: document.getElementById('fp-fecha').value,
+      monto,
+      metodo: document.getElementById('fp-metodo').value,
+      notas: document.getElementById('fp-notas').value.trim()
+    });
+  }
+
   closeModal('pagoModal');
   renderAll();
-  showToast('Pago registrado ✓');
+  showToast(modoEgreso ? 'Egreso registrado' : 'Pago registrado');
+  modoEgreso = false;
+}
+
+function registrarEgreso(id) {
+  const f = state.finanzas.find(x => x.id === id);
+  if (!f) return;
+  pagoFinanzaId = id;
+  document.getElementById('fp-caso').textContent = 'Egreso: ' + f.patient;
+  document.getElementById('fp-monto').value = '';
+  document.getElementById('fp-fecha').value = new Date().toISOString().slice(0,10);
+  document.getElementById('fp-metodo').value = 'Varios';
+  document.getElementById('fp-notas').value = '';
+  openModal('pagoModal');
+  modoEgreso = true;
 }
 
 // ==================== NAVEGACIÓN Y MODALES ====================
