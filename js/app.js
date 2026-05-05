@@ -1281,6 +1281,8 @@ function renderFinanzas() {
     <div class="stat-card"><div class="stat-label">Total cobrado</div><div class="stat-value" style="color:var(--green)">$${totalCobrado.toFixed(0)}</div></div>
     <div class="stat-card"><div class="stat-label">Pendientes</div><div class="stat-value" style="color:var(--red)">${pendientes}</div></div>
     <div class="stat-card"><div class="stat-label">Próx. venc.</div><div class="stat-value" style="color:var(--yellow)">${proximosVencimientos()}</div></div>
+    <div class="stat-card"><div class="stat-label">Egresos</div><div class="stat-value" style="color:var(--red)">$${totalEgresos.toFixed(0)}</div></div>
+    <div class="stat-card"><div class="stat-label">Balance</div><div class="stat-value" style="color:${balance >= 0 ? 'var(--green)' : 'var(--red)'}">$${balance.toFixed(0)}</div></div>
   `;
 
   document.getElementById('finanzasList').innerHTML = lista.map(f => {
@@ -1315,6 +1317,7 @@ function renderFinanzas() {
 </div>
       <div class="finanza-actions">
         <button class="qbtn" onclick="registrarPago('${f.id}')">+ Pago</button>
+        <button class="qbtn" style="color:var(--red)" onclick="registrarEgreso('${f.id}')">- Egreso</button>
         <button class="qbtn" onclick="editarFinanza('${f.id}')">✎</button>
         <button class="qbtn" style="color:var(--red)" onclick="eliminarFinanza('${f.id}')">🗑</button>
       </div>
