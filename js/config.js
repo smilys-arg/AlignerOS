@@ -16,7 +16,7 @@ const STAGES = ['Imprimir','Termoformar','Cortar/Pulir','Listo'];
 const SKEYS = ['imprimir','termoformar','cutpolish','listo'];
 const SCOLS = {
   imprimir: '#dc2626',     // rojo
-  termoformar: '#ea580c',  // naranja
+  termoformar: '#7c3aed',  // violeta
   cutpolish: '#2563eb',    // azul
   listo: '#16a34a'         // verde
 };
