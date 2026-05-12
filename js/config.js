@@ -14,7 +14,12 @@ const db = firebase.database();
 // ==================== CONSTANTES ====================
 const STAGES = ['Imprimir','Termoformar','Cortar/Pulir','Listo'];
 const SKEYS = ['imprimir','termoformar','cutpolish','listo'];
-const SCOLS = {imprimir:'#2563eb',termoformar:'#7c3aed',cutpolish:'#ea580c',listo:'#16a34a'};
+const SCOLS = {
+  imprimir: '#dc2626',     // rojo
+  termoformar: '#ea580c',  // naranja
+  cutpolish: '#2563eb',    // azul
+  listo: '#16a34a'         // verde
+};
 const FINAL_STAGE = 4;
 const LS_KEY = 'aligner_data_v1';
 const MAX_UNDO = 20;
