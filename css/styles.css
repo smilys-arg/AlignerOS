@@ -141,7 +141,7 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 .alin-grid{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
 .alin-chip{width:30px;height:24px;border-radius:4px;font-size:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;font-weight:600;border:1px solid transparent;background:var(--border);color:var(--text2);user-select:none}
 .alin-chip.print{background:rgba(220,38,38,.12);color:#dc2626;border-color:rgba(220,38,38,.25)}
-.alin-chip.thermo{background:rgba(234,88,12,.12);color:#ea580c;border-color:rgba(234,88,12,.25)}
+.alin-chip.thermo{background:rgba(124,58,237,.12);color:#7c3aed;border-color:rgba(124,58,237,.25)}
 .alin-chip.cutpolish{background:rgba(37,99,235,.12);color:#2563eb;border-color:rgba(37,99,235,.25)}
 .alin-chip.listo{background:rgba(22,163,74,.12);color:#16a34a;border-color:rgba(22,163,74,.25)}
 .alin-chip.pendiente{background:var(--border);color:var(--text3);opacity:.6}
