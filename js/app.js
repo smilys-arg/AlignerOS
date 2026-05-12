@@ -507,38 +507,35 @@ document.querySelectorAll('.quick-btns .qbtn').forEach(btn => {
     e.preventDefault(); // Evita el click fantasma posterior
   }, {passive: false});
 });
-function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
-  currentStageIdx = parseInt(currentStageIdx, 10);
-  const selector = document.getElementById(`ksel-${cardId}`);
-  if (!selector) return;
-  const selected = selector.querySelectorAll('.kanban-alin-item.selected');
-  if (selected.length === 0) { alert('Seleccioná al menos un alineador'); return; }
-  const targetStage = parseInt(document.getElementById(`ksel-stage-${cardId}`).value, 10);
-  if (isNaN(targetStage)) return;
+function moveSelected(caseId, arcType) {
+  const sel = document.getElementById(`moveTarget-${caseId}-${arcType}`);
+  if (!sel) {
+    showToast('Error con el selector de etapa. Refresque el caso.');
+    return;
+  }
+  const target = parseInt(sel.value);
+  if (isNaN(target)) return;
   const c = state.cases.find(x => x.id === caseId);
   if (!c) return;
   const arc = c.arcadas[arcType];
   if (!arc) return;
+  if (selection.indices.size === 0) {
+    showToast('Seleccioná al menos un alineador');
+    return;
+  }
+  if (!confirm(`¿Mover ${selection.indices.size} alineador(es) a ${target === FINAL_STAGE ? 'Finalizado' : STAGES[target]}?`)) return;
   pushUndo();
   let count = 0;
-  selected.forEach(el => {
-    const idx = parseInt(el.dataset.idx, 10);
-    if (!isNaN(idx) && arc.alinStates[idx] === currentStageIdx) {
-      const oldStage = arc.alinStates[idx];
-      arc.alinStates[idx] = targetStage;
-      adjustStockOnStageChange(arc, idx, oldStage, targetStage);
-      count++;
-    }
+  selection.indices.forEach(i => {
+    const oldStage = arc.alinStates[i];
+    arc.alinStates[i] = target;
+    adjustStockOnStageChange(arc, i, oldStage, target);
+    count++;
   });
-  if (count > 0) {
-    selected.forEach(el => el.classList.remove('selected'));
-    selector.classList.remove('open');
-    addActivity(`✏️ Mover ${count} alin. de ${c.patient} a ${targetStage === FINAL_STAGE ? 'Finalizado' : STAGES[targetStage]}`);
-    renderAll();
-    showToast(`${count} alin. → ${targetStage === FINAL_STAGE ? 'Finalizado' : STAGES[targetStage]}`);
-  } else {
-    alert('Ninguno de los alineadores seleccionados está en la etapa actual.');
-  }
+  clearSelection();
+  addActivity(`✏️ Mover ${count} alin. de ${c.patient}`);
+  renderAll();
+  showToast(`${count} alin. → ${target === FINAL_STAGE ? 'Finalizado' : STAGES[target]}`);
 }
 
 function completeStage(caseId, arcType, stageIdx) {
@@ -689,27 +686,68 @@ function submitNewCase() {
   const s = parseInt(document.getElementById('f-sup').value) || 0;
   const inf = parseInt(document.getElementById('f-inf').value) || 0;
   const d = document.getElementById('f-date').value;
+  const ob = document.getElementById('f-obs').value.trim();
+
+  // Nuevos campos financieros
   const ingreso = parseFloat(document.getElementById('f-ingreso')?.value) || 0;
   const egreso = parseFloat(document.getElementById('f-egreso')?.value) || 0;
-  const ob = document.getElementById('f-obs').value.trim();
-  if(!p || !dr || !d) { alert('Completá paciente, doctor y fecha'); return; }
+
+  if (!p || !dr || !d) {
+    alert('Completá paciente, doctor y fecha');
+    return;
+  }
+
+  // Función auxiliar para ajustar el array de estados al cambiar el total
+  const resizeArc = (arc, newTotal) => {
+    if (!arc) return;
+    const oldTotal = arc.alinStates.length;
+    if (newTotal > oldTotal) {
+      for (let i = oldTotal; i < newTotal; i++) arc.alinStates.push(-1);
+    } else if (newTotal < oldTotal) {
+      arc.alinStates = arc.alinStates.slice(0, newTotal);
+    }
+    arc.total = newTotal;
+  };
+
   pushUndo();
-  if(editingCaseId) {
-    const c = state.cases.find(x=>x.id===editingCaseId);
-    if(c) {
-      c.patient = p; c.doctor = dr; c.doctorId = did; c.delivery = d; c.obs = ob;
-      if(s>0) { if(!c.arcadas.sup) c.arcadas.sup = makeArc(s); else c.arcadas.sup.total = s; }
-      else c.arcadas.sup = null;
-      if(inf>0) { if(!c.arcadas.inf) c.arcadas.inf = makeArc(inf); else c.arcadas.inf.total = inf; }
-      else c.arcadas.inf = null;
+
+  if (editingCaseId) {
+    // Editando un caso existente
+    const c = state.cases.find(x => x.id === editingCaseId);
+    if (c) {
+      c.patient = p;
+      c.doctor = dr;
+      c.doctorId = did;
+      c.delivery = d;
+      c.obs = ob;
+
+      // Actualizar arcada superior
+      if (s > 0) {
+        if (!c.arcadas.sup) c.arcadas.sup = makeArc(0);
+        resizeArc(c.arcadas.sup, s);
+      } else {
+        c.arcadas.sup = null;
+      }
+
+      // Actualizar arcada inferior
+      if (inf > 0) {
+        if (!c.arcadas.inf) c.arcadas.inf = makeArc(0);
+        resizeArc(c.arcadas.inf, inf);
+      } else {
+        c.arcadas.inf = null;
+      }
+
+      // Actualizar montos
       c.montoTotal = ingreso;
       c.egreso = egreso;
     }
     addActivity(`✎ Caso editado: ${p}`);
   } else {
-    state.cases.unshift(makeCase(p,dr,did,s,inf,d,ingreso,egreso,ob));
+    // Nuevo caso
+    state.cases.unshift(makeCase(p, dr, did, s, inf, d, ob, ingreso, egreso));
     addActivity(`➕ Nuevo caso: ${p}`);
   }
+
   closeModal('newCaseModal');
   editingCaseId = null;
   renderAll();
