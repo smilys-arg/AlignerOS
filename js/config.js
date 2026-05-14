@@ -20,7 +20,7 @@ const SCOLS = {
   cutpolish: '#2563eb',    // azul
   listo: '#16a34a'         // verde
 };
-const FINAL_STAGE = 4;
+var FINAL_STAGE = 4;
 const LS_KEY = 'aligner_data_v1';
 const MAX_UNDO = 20;
 const MAX_ACTIVITY = 100;
