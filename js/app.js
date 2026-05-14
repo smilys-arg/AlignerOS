@@ -490,6 +490,40 @@ function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
   selector.classList.add('open');
 }
 
+function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
+  currentStageIdx = parseInt(currentStageIdx, 10);
+  const selector = document.getElementById(`ksel-${cardId}`);
+  if (!selector) return;
+  const selected = selector.querySelectorAll('.kanban-alin-item.selected');
+  if (selected.length === 0) { alert('Seleccioná al menos un alineador'); return; }
+  const targetStage = parseInt(document.getElementById(`ksel-stage-${cardId}`).value, 10);
+  if (isNaN(targetStage)) return;
+  const c = state.cases.find(x => x.id === caseId);
+  if (!c) return;
+  const arc = c.arcadas[arcType];
+  if (!arc) return;
+  pushUndo();
+  let count = 0;
+  selected.forEach(el => {
+    const idx = parseInt(el.dataset.idx, 10);
+    if (!isNaN(idx) && arc.alinStates[idx] === currentStageIdx) {
+      const oldStage = arc.alinStates[idx];
+      arc.alinStates[idx] = targetStage;
+      adjustStockOnStageChange(arc, idx, oldStage, targetStage);
+      count++;
+    }
+  });
+  if (count > 0) {
+    selected.forEach(el => el.classList.remove('selected'));
+    selector.classList.remove('open');
+    addActivity(`✏️ Mover ${count} alin. de ${c.patient} a ${targetStage === FINAL_STAGE ? 'Finalizado' : STAGES[targetStage]}`);
+    renderAll();
+    showToast(`${count} alin. → ${targetStage === FINAL_STAGE ? 'Finalizado' : STAGES[targetStage]}`);
+  } else {
+    alert('Ninguno de los alineadores seleccionados está en la etapa actual.');
+  }
+}
+
 // Cerrar selectores del kanban al hacer clic fuera (soluciona iPhone)
 document.addEventListener('click', function(e) {
   const openSelectors = document.querySelectorAll('.kanban-alin-selector.open');
@@ -659,23 +693,7 @@ function toggleAlin(caseId, arcType, idx) {
   }
   renderCases();
 }
-function moveSelected(caseId, arcType) {
-  const sel = document.getElementById(`moveTarget-${caseId}-${arcType}`);
-  if(!sel) return;
-  const target = parseInt(sel.value);
-  const c = state.cases.find(x=>x.id===caseId); if(!c) return;
-  const arc = c.arcadas[arcType]; if(!arc) return;
-  pushUndo();
-  selection.indices.forEach(i => {
-    const oldStage = arc.alinStates[i];
-    arc.alinStates[i] = target;
-    adjustStockOnStageChange(arc, i, oldStage, target);
-  });
-  clearSelection();
-  addActivity(`✏️ Mover ${selection.indices.size} alin. de ${c.patient}`);
-  renderAll();
-  showToast(`${selection.indices.size} alin. → ${target===FINAL_STAGE?'Finalizado':STAGES[target]}`);
-}
+
 
 // ==================== CRUD CASOS ====================
 function openNewCase() {
@@ -756,7 +774,7 @@ function submitNewCase() {
     addActivity(`✎ Caso editado: ${p}`);
   } else {
     // Nuevo caso
-    state.cases.unshift(makeCase(p, dr, did, s, inf, d, ob, ingreso, egreso));
+    state.cases.unshift(makeCase(p, dr, did, s, inf, d, ingreso, egreso, ob));
     addActivity(`➕ Nuevo caso: ${p}`);
   }
   // Subir STL si hay archivos
