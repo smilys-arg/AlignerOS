@@ -1684,39 +1684,10 @@ function showToast(msg) {
   toastT = setTimeout(() => t.classList.remove('show'), 2500);
 }
 
+
 // ==================== INICIAR ====================
 document.getElementById('bn-kanban').classList.add('active');
-
-const mainOriginalHTML = document.querySelector('main').innerHTML;
-
-firebase.auth().onAuthStateChanged(user => {
-  if (!user) {
-    document.querySelector('main').innerHTML = `
-      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:60vh;gap:16px">
-        <div style="font-size:32px">⬣</div>
-        <div style="font-size:20px;font-weight:600;color:var(--text)">AlignerOS</div>
-        <div style="font-size:13px;color:var(--text3)">Solo para uso interno del laboratorio</div>
-        <button onclick="login()" style="padding:12px 28px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-family:Inter,sans-serif">
-          Iniciar sesión con Google
-        </button>
-      </div>`;
-  } else {
-    // Restaurar el HTML original antes de arrancar
-    document.querySelector('main').innerHTML = mainOriginalHTML;
-    document.getElementById('bn-kanban').classList.add('active');
-    loadState();
-    renderAll();
-    setupFirebaseListener();
-    requestNotificationPermission();
-  }
-});
-
-function login() {
-  const provider = new firebase.auth.GoogleAuthProvider();
-  firebase.auth().signInWithPopup(provider)
-    .catch(err => alert('Error al iniciar sesión: ' + err.message));
-}
-
-function logout() {
-  firebase.auth().signOut();
-}
+loadState();
+renderAll();
+setupFirebaseListener();
+requestNotificationPermission();
