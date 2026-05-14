@@ -419,7 +419,7 @@ function renderKanban() {
         <div class="arc-top"><div style="min-width:0;flex:1"><div class="arc-patient">${it.c.patient.split(',')[0]}</div><div class="arc-doctor">${it.c.doctorId||it.c.doctor}</div></div><span class="arc-type ${it.at}">${it.at.toUpperCase()}</span></div>
         <div class="alin-range">
   ${it.indices.map(i => {
-    const url = it.arc?.stlUrls?.[i];
+    const url = it.c.arcadas[it.at]?.stlUrls?.[i];
     if (url) {
       return `<a href="${url}" target="_blank" title="Descargar STL ${i}" style="text-decoration:none;color:var(--accent);font-weight:600" onclick="event.stopPropagation()">${i}</a>`;
     }
