@@ -295,6 +295,19 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
   gap: 6px;
   margin-top: 10px;
 }
+/* ── Zona de arrastre STL ── */
+.stl-drop-zone {
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+.stl-drop-zone.dragover {
+  background: var(--surface2);
+  border-color: var(--accent);
+}
 
 @media(min-width:768px){main{padding:24px;padding-bottom:24px}.stats-grid{grid-template-columns:repeat(7,1fr)}.case-days{display:block}}
 @media(min-width:1024px){.desktop-nav{display:flex}.bottom-nav{display:none!important}.fab{display:none!important}.btn-new{display:flex}.date-chip{display:block}.kanban{min-width:unset;grid-template-columns:repeat(4,1fr)}.kanban-wrap{overflow-x:visible;margin:0;padding:0}.modal{border-radius:12px;padding:24px}.modal-overlay{align-items:center}}
