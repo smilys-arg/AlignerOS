@@ -52,7 +52,7 @@ let selection = { caseId:null, arcType:null, indices:new Set() };
 let editingFinanzaId = null;
 let pagoFinanzaId = null;
 let modoEgreso = false;
-
+let stlFiles = []; // archivos .stl pendientes de subir
 // Historial de deshacer y actividad
 const undoStack = [];
 const activityLog = [];
@@ -417,7 +417,15 @@ function renderKanban() {
       const cardId = `${it.c.id}-${it.at}-${stageIdx}`;
       return `<div class="arc-card ${it.p}">
         <div class="arc-top"><div style="min-width:0;flex:1"><div class="arc-patient">${it.c.patient.split(',')[0]}</div><div class="arc-doctor">${it.c.doctorId||it.c.doctor}</div></div><span class="arc-type ${it.at}">${it.at.toUpperCase()}</span></div>
-        <div class="alin-range">${rangeStr} (${it.indices.length} uds)</div>
+        <div class="alin-range">
+  ${it.indices.map(i => {
+    const url = it.arc?.stlUrls?.[i];
+    if (url) {
+      return `<a href="${url}" target="_blank" title="Descargar STL ${i}" style="text-decoration:none;color:var(--accent);font-weight:600" onclick="event.stopPropagation()">${i}</a>`;
+    }
+    return i;
+  }).join(' ')} (${it.indices.length} uds)
+</div>
         <div class="arc-bottom"><span class="delivery-chip ${it.p}">📅 ${d<=0?'VENCIDO':d+'d'}</span>
         <div class="quick-btns">
          <button class="qbtn" onmousedown="event.preventDefault(); toggleKanbanSelector('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Seleccionar</button>
@@ -599,7 +607,8 @@ function renderCases() {
         if(st>=0 && st<4) cls = clsMap[st];
         else if(st===FINAL_STAGE) cls = 'done';
         const sel = selSame && selection.indices.has(i) ? ' selected' : '';
-        return `<span class="alin-chip ${cls}${sel}" onclick="event.stopPropagation();toggleAlin('${c.id}','${at}',${i})">${i}${st===FINAL_STAGE?'✓':''}</span>`;
+        const stlUrl = (arc.stlUrls && arc.stlUrls[i]) ? ` <a href="${arc.stlUrls[i]}" target="_blank" title="Descargar STL" onclick="event.stopPropagation()" style="text-decoration:none;font-size:8px">📎</a>` : '';
+        return `<span class="alin-chip ${cls}${sel}" onclick="event.stopPropagation();toggleAlin('${c.id}','${at}',${i})">${i}${st===FINAL_STAGE?'✓':''}${stlUrl}</span>`;
       }).join('');
       const selCount = selSame ? selection.indices.size : 0;
       const actHtml = selCount > 0 ? `
@@ -677,6 +686,9 @@ function openNewCase() {
   document.getElementById('f-date').value = daysFromNow(7);
   document.getElementById('f-ingreso').value = '';
   document.getElementById('f-egreso').value = '';
+  stlFiles = [];
+document.getElementById('stlPreview').innerHTML = '';
+document.getElementById('stlDropZone')?.classList.remove('dragover');
   openModal('newCaseModal');
 }
 function submitNewCase() {
@@ -747,7 +759,9 @@ function submitNewCase() {
     state.cases.unshift(makeCase(p, dr, did, s, inf, d, ob, ingreso, egreso));
     addActivity(`➕ Nuevo caso: ${p}`);
   }
-
+  // Subir STL si hay archivos
+const caseId = editingCaseId || (state.cases[0]?.id);
+if (caseId) await uploadSTLFiles(caseId);
   closeModal('newCaseModal');
   editingCaseId = null;
   renderAll();
@@ -767,6 +781,9 @@ function editCase(id) {
   document.getElementById('f-ingreso').value = c.montoTotal || '';
   document.getElementById('f-egreso').value = c.egreso || '';
   document.getElementById('f-obs').value = c.obs || '';
+  stlFiles = [];
+document.getElementById('stlPreview').innerHTML = '';
+document.getElementById('stlDropZone')?.classList.remove('dragover');
   openModal('newCaseModal');
 }
 function deleteCase(id) {
@@ -1539,6 +1556,89 @@ function registrarEgreso(id) {
   document.getElementById('fp-notas').value = '';
   openModal('pagoModal');
   modoEgreso = true;
+}
+
+// ==================== SUBIDA STL (Supabase) ====================
+
+async function handleSTLDrop(e) {
+  e.preventDefault();
+  document.getElementById('stlDropZone').classList.remove('dragover');
+  const files = e.dataTransfer.files;
+  if (files.length) await processSTLFiles(files);
+}
+
+async function handleSTLFiles(inputFiles) {
+  await processSTLFiles(inputFiles);
+}
+
+async function processSTLFiles(files) {
+  const fileList = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.stl'));
+  if (!fileList.length) {
+    showToast('Solo se permiten archivos .stl');
+    return;
+  }
+
+  stlFiles = [];
+  const regex = /[-_\s](mandible|maxilla)[-_\s]*(\d+)\.stl$/i;
+  const parsed = { sup: {}, inf: {} };
+
+  for (const file of fileList) {
+    const match = file.name.match(regex);
+    if (!match) {
+      showToast(`Formato incorrecto: ${file.name}`);
+      continue;
+    }
+    const arc = match[1].toLowerCase() === 'maxilla' ? 'sup' : 'inf';
+    const step = parseInt(match[2]);
+    if (!parsed[arc][step]) parsed[arc][step] = file;
+  }
+
+  for (const [arc, steps] of Object.entries(parsed)) {
+    for (const [step, file] of Object.entries(steps)) {
+      stlFiles.push({ file, arc, step: parseInt(step) });
+    }
+  }
+
+  const supMax = Object.keys(parsed.sup).map(Number).sort((a,b)=>b-a)[0] ?? -1;
+  const infMax = Object.keys(parsed.inf).map(Number).sort((a,b)=>b-a)[0] ?? -1;
+  if (supMax >= 0) document.getElementById('f-sup').value = supMax + 1;
+  if (infMax >= 0) document.getElementById('f-inf').value = infMax + 1;
+
+  let html = '';
+  if (Object.keys(parsed.sup).length) html += `<div>▲ Superior: ${Object.keys(parsed.sup).map(Number).sort((a,b)=>a-b).join(', ')}</div>`;
+  if (Object.keys(parsed.inf).length) html += `<div>▼ Inferior: ${Object.keys(parsed.inf).map(Number).sort((a,b)=>a-b).join(', ')}</div>`;
+  document.getElementById('stlPreview').innerHTML = html || 'Ningún archivo válido';
+
+  showToast(`${stlFiles.length} archivos listos`);
+}
+
+async function uploadSTLFiles(caseId) {
+  if (!stlFiles.length) return;
+
+  const c = state.cases.find(x => x.id === caseId);
+  if (!c) return;
+
+  for (const {file, arc, step} of stlFiles) {
+    const path = `${caseId}/${arc}/${step}.stl`;
+    const { error } = await supabase.storage
+      .from('stl-files')
+      .upload(path, file, { upsert: true });
+
+    if (error) {
+      console.error('Error al subir STL:', error);
+      continue;
+    }
+
+    const { data: urlData } = supabase.storage
+      .from('stl-files')
+      .getPublicUrl(path);
+
+    if (!c.arcadas[arc].stlUrls) c.arcadas[arc].stlUrls = {};
+    c.arcadas[arc].stlUrls[step] = urlData.publicUrl;
+  }
+
+  stlFiles = [];
+  document.getElementById('stlPreview').innerHTML = '';
 }
 
 // ==================== NAVEGACIÓN Y MODALES ====================
