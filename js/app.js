@@ -709,7 +709,7 @@ document.getElementById('stlPreview').innerHTML = '';
 document.getElementById('stlDropZone')?.classList.remove('dragover');
   openModal('newCaseModal');
 }
-function submitNewCase() {
+async function submitNewCase() {
   const p = document.getElementById('f-patient').value.trim();
   const dr = document.getElementById('f-doctor').value.trim();
   const did = document.getElementById('f-doctorId').value.trim();
