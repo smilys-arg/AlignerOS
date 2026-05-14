@@ -1638,7 +1638,7 @@ async function uploadSTLFiles(caseId) {
 
   for (const {file, arc, step} of stlFiles) {
     const path = `${caseId}/${arc}/${step}.stl`;
-    const { error } = await supabase.storage
+    const { error } = await supabaseClient.storage
       .from('stl-files')
       .upload(path, file, { upsert: true });
 
@@ -1647,7 +1647,7 @@ async function uploadSTLFiles(caseId) {
       continue;
     }
 
-    const { data: urlData } = supabase.storage
+    const { data: urlData } = supabaseClient.storage
       .from('stl-files')
       .getPublicUrl(path);
 
