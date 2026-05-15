@@ -1649,31 +1649,52 @@ async function processSTLFiles(files) {
 
 async function uploadSTLFiles(caseId) {
   if (!stlFiles.length) return;
-  console.log('Archivos a subir:', stlFiles.map(f => ({ name: f.file.name, size: f.file.size })));
+
   const c = state.cases.find(x => x.id === caseId);
   if (!c) return;
 
   for (const {file, arc, step} of stlFiles) {
     const path = `${caseId}/${arc}/${step}.stl`;
-    const { error } = await supabaseClient.storage
-      .from('stl-files')
-      .upload(path, file, { upsert: true });
-
-    if (error) {
-      console.error('Error al subir STL:', error);
-      continue;
+    let retries = 2;
+    let success = false;
+    
+    while (retries >= 0 && !success) {
+      try {
+        const { error } = await supabaseClient.storage
+          .from('stl-files')
+          .upload(path, file, { upsert: true });
+        
+        if (error) {
+          console.error('Intento fallido:', retries, error);
+          retries--;
+          if (retries < 0) {
+            showToast('Error al subir STL después de varios intentos');
+            return;
+          }
+          await new Promise(r => setTimeout(r, 1000)); // esperar 1s antes de reintentar
+        } else {
+          success = true;
+          const { data: urlData } = supabaseClient.storage
+            .from('stl-files')
+            .getPublicUrl(path);
+          if (!c.arcadas[arc].stlUrls) c.arcadas[arc].stlUrls = {};
+          c.arcadas[arc].stlUrls[step] = urlData.publicUrl;
+        }
+      } catch (e) {
+        console.error('Error de red:', e);
+        retries--;
+        if (retries < 0) {
+          showToast('Error de conexión al subir STL');
+          return;
+        }
+        await new Promise(r => setTimeout(r, 1000));
+      }
     }
-
-    const { data: urlData } = supabaseClient.storage
-      .from('stl-files')
-      .getPublicUrl(path);
-
-    if (!c.arcadas[arc].stlUrls) c.arcadas[arc].stlUrls = {};
-    c.arcadas[arc].stlUrls[step] = urlData.publicUrl;
   }
 
   stlFiles = [];
   document.getElementById('stlPreview').innerHTML = '';
+  renderAll(); // refrescar la vista para mostrar enlaces
 }
 
 // ==================== NAVEGACIÓN Y MODALES ====================
