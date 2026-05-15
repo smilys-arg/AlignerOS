@@ -751,6 +751,23 @@ async function submitNewCase() {
       c.delivery = d;
       c.obs = ob;
 
+     const tieneSup = stlFiles.some(f => f.arc === 'sup');
+const tieneInf = stlFiles.some(f => f.arc === 'inf');
+
+if (s > 0 || tieneSup) {
+  if (!c.arcadas.sup) c.arcadas.sup = makeArc(0);
+  resizeArc(c.arcadas.sup, Math.max(s, tieneSup ? Math.max(...stlFiles.filter(f=>f.arc==='sup').map(f=>f.step)) + 1 : 0));
+} else if (!tieneSup) {
+  c.arcadas.sup = null;
+}
+
+if (inf > 0 || tieneInf) {
+  if (!c.arcadas.inf) c.arcadas.inf = makeArc(0);
+  resizeArc(c.arcadas.inf, Math.max(inf, tieneInf ? Math.max(...stlFiles.filter(f=>f.arc==='inf').map(f=>f.step)) + 1 : 0));
+} else if (!tieneInf) {
+  c.arcadas.inf = null;
+} 
+
       // Actualizar arcada superior
       if (s > 0) {
         if (!c.arcadas.sup) c.arcadas.sup = makeArc(0);
