@@ -1649,7 +1649,7 @@ async function processSTLFiles(files) {
 
 async function uploadSTLFiles(caseId) {
   if (!stlFiles.length) return;
-
+  console.log('Archivos a subir:', stlFiles.map(f => ({ name: f.file.name, size: f.file.size })));
   const c = state.cases.find(x => x.id === caseId);
   if (!c) return;
 
