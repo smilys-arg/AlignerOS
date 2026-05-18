@@ -1,10 +1,32 @@
 :root {
-  --bg: #fbfeff;        /* Fondo general muy claro, con un leve tono azul helado */
-  --surface: #ffffff;   /* Tarjetas, modales y paneles completamente blancos */
-  --surface2: #f8fafc;  /* Cabeceras de columnas y áreas secundarias: gris azulado suave */
-  --border: #e9eef3;    /* Bordes más sutiles y menos contrastados */
-  --border2: #dce3ec;   /* Bordes secundarios aún más tenues */
-  /* El resto de variables (textos, acentos, etc.) se mantienen igual para conservar legibilidad */
+  --bg: #ffffff;           /* Fondo general blanco puro */
+  --surface: #ffffff;      /* Tarjetas, modales, paneles completamente blancos */
+  --surface2: #f9fafb;     /* Cabeceras y áreas secundarias: gris casi imperceptible */
+  --border: #eef2f6;       /* Bordes muy sutiles, casi transparentes */
+  --border2: #e2e8f0;      /* Bordes secundarios ligeramente más visibles */
+  --text: #0f172a;         /* Texto principal (gris oscuro slate) */
+  --text2: #475569;        /* Texto secundario */
+  --text3: #94a3b8;        /* Texto terciario */
+  --accent: #2563eb;       /* Azul de acento */
+  --accent2: #1d4ed8;
+  --red: #dc2626;
+  --orange: #f97316;
+  --yellow: #ca8a04;
+  --green: #16a34a;
+  --sp: #2563eb;
+  --st: #7c3aed;
+  --sc: #ea580c;
+  --spo: #0891b2;
+  --senv: #16a34a;
+  --sfin: #64748b;
+  --done: #64748b;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.04);
+  --shadow: 0 4px 6px rgba(0,0,0,.03), 0 1px 3px rgba(0,0,0,.05);
+  --radius: 10px;
+  --radius-sm: 6px;
+  --nav-h: 60px;
+  --header-h: 56px;
+  --safe-b: env(safe-area-inset-bottom,0px);
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100dvh;overflow-x:hidden;-webkit-font-smoothing:antialiased}
