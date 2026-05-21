@@ -154,9 +154,28 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
 .arc-badge.sup{background:rgba(37,99,235,.1);color:var(--accent)}
 .arc-badge.inf{background:rgba(124,58,237,.1);color:var(--st)}
 .arc-total-lbl{font-size:10px;color:var(--text3);margin-left:auto}
-.alin-grid{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
-.alin-chip{width:30px;height:24px;border-radius:4px;font-size:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s;font-weight:600;border:1px solid transparent;background:var(--border);color:var(--text2);user-select:none}
-.alin-chip.print{background:rgba(220,38,38,.12);color:#dc2626;border-color:rgba(220,38,38,.25)}
+.alin-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.alin-chip {
+  width: 36px;
+  height: 30px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all .15s;
+  font-weight: 600;
+  border: 1px solid transparent;
+  background: var(--border);
+  color: var(--text2);
+  user-select: none;
+  border-radius: 4px;
+}.alin-chip.print{background:rgba(220,38,38,.12);color:#dc2626;border-color:rgba(220,38,38,.25)}
 .alin-chip.thermo{background: rgba(6, 182, 212, 0.12);color: #06b6d4;border-color: rgba(6, 182, 212, 0.25)}
 .alin-chip.cutpolish{background:rgba(37,99,235,.12);color:#2563eb;border-color:rgba(37,99,235,.25)}
 .alin-chip.listo{background:rgba(22,163,74,.12);color:#16a34a;border-color:rgba(22,163,74,.25)}
@@ -324,6 +343,40 @@ main{padding:18px;padding-bottom:calc(var(--nav-h) + var(--safe-b) + 18px);max-w
   background: var(--surface2);
   border-color: var(--accent);
 }
+
+/* Botón de descarga STL (separado del número) */
+.stl-download-btn {
+  font-size: 12px;
+  text-decoration: none;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  color: var(--accent);
+  transition: all 0.15s;
+}
+.stl-download-btn:hover {
+  background: var(--accent);
+  color: white;
+}
+
+/* Aumentar tamaño en tablets y móviles */
+@media (max-width: 767px) {
+  .alin-chip {
+    width: 42px;
+    height: 36px;
+    font-size: 13px;
+  }
+  .stl-download-btn {
+    min-width: 28px;
+    min-height: 28px;
+    font-size: 14px;
+  }
 
 @media(min-width:768px){main{padding:24px;padding-bottom:24px}.stats-grid{grid-template-columns:repeat(7,1fr)}.case-days{display:block}}
 @media(min-width:1024px){.desktop-nav{display:flex}.bottom-nav{display:none!important}.fab{display:none!important}.btn-new{display:flex}.date-chip{display:block}.kanban{min-width:unset;grid-template-columns:repeat(4,1fr)}.kanban-wrap{overflow-x:visible;margin:0;padding:0}.modal{border-radius:12px;padding:24px}.modal-overlay{align-items:center}}
