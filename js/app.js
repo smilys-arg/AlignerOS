@@ -53,6 +53,7 @@ let editingFinanzaId = null;
 let pagoFinanzaId = null;
 let modoEgreso = false;
 let stlFiles = []; // archivos .stl pendientes de subir
+let pdfFiles = []; // archivos PDF pendientes de subir
 // Historial de deshacer y actividad
 const undoStack = [];
 const activityLog = [];
@@ -675,7 +676,10 @@ function renderCases() {
           <span class="chevron" onclick="toggleCase('${c.id}')">▶</span>
         </div>
       </div>
-      ${c.open ? `<div class="case-body"><div class="arcadas-grid">${arcHtml}</div>${c.obs ? `<div class="obs-note">📝 ${c.obs}</div>` : ''}</div>` : ''}
+      ${c.open ? `<div class="case-body"><div class="arcadas-grid">${arcHtml}</div>${c.obs || c.pdfUrls?.length ? `<div class="obs-note">
+  ${c.obs ? `📝 ${c.obs}` : ''}
+  ${c.pdfUrls?.length ? c.pdfUrls.map(p => `<div><a href="${p.url}" target="_blank" title="Descargar PDF">📎 ${p.name}</a></div>`).join('') : ''}
+</div>` : ''}
     </div>`;
   }).join('');
 }
@@ -707,6 +711,8 @@ function openNewCase() {
   stlFiles = [];
 document.getElementById('stlPreview').innerHTML = '';
 document.getElementById('stlDropZone')?.classList.remove('dragover');
+  pdfFiles = [];
+document.getElementById('pdfPreview').innerHTML = '';
   openModal('newCaseModal');
 }
 async function submitNewCase() {
@@ -797,6 +803,7 @@ if (inf > 0 || tieneInf) {
   // Subir STL si hay archivos
 const caseId = editingCaseId || (state.cases[0]?.id);
 if (caseId) await uploadSTLFiles(caseId);
+  await uploadPDFFiles(caseId);
   closeModal('newCaseModal');
   editingCaseId = null;
   renderAll();
@@ -819,6 +826,8 @@ function editCase(id) {
   stlFiles = [];
 document.getElementById('stlPreview').innerHTML = '';
 document.getElementById('stlDropZone')?.classList.remove('dragover');
+  pdfFiles = [];
+document.getElementById('pdfPreview').innerHTML = '';
   openModal('newCaseModal');
 }
 function deleteCase(id) {
@@ -1695,6 +1704,63 @@ async function uploadSTLFiles(caseId) {
   stlFiles = [];
   document.getElementById('stlPreview').innerHTML = '';
   renderAll(); // refrescar la vista para mostrar enlaces
+}
+
+// ==================== SUBIDA PDFs (Supabase) ====================
+async function handlePDFDrop(e) {
+  e.preventDefault();
+  document.getElementById('pdfDropZone').classList.remove('dragover');
+  const files = e.dataTransfer.files;
+  if (files.length) await processPDFFiles(files);
+}
+
+async function handlePDFFiles(inputFiles) {
+  await processPDFFiles(inputFiles);
+}
+
+async function processPDFFiles(files) {
+  const fileList = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  if (!fileList.length) {
+    showToast('Solo se permiten archivos .pdf');
+    return;
+  }
+  if (fileList.length > 3) {
+    showToast('Máximo 3 archivos PDF');
+    return;
+  }
+
+  pdfFiles = fileList.map(file => ({ file }));
+  document.getElementById('pdfPreview').innerHTML = pdfFiles.map(f => `📄 ${f.file.name}`).join('<br>');
+  showToast(`${pdfFiles.length} PDF(s) listos`);
+}
+
+async function uploadPDFFiles(caseId) {
+  if (!pdfFiles.length) return;
+
+  const c = state.cases.find(x => x.id === caseId);
+  if (!c) return;
+
+  // Crear array de URLs si no existe
+  if (!c.pdfUrls) c.pdfUrls = [];
+
+  for (const {file} of pdfFiles) {
+    const path = `pdfs/${caseId}/${file.name}`;
+    const { error } = await supabaseClient.storage
+      .from('stl-files')
+      .upload(path, file, { upsert: true });
+
+    if (!error) {
+      const { data: urlData } = supabaseClient.storage
+        .from('stl-files')
+        .getPublicUrl(path);
+      c.pdfUrls.push({ name: file.name, url: urlData.publicUrl });
+    } else {
+      console.error('Error al subir PDF:', error);
+    }
+  }
+
+  pdfFiles = [];
+  document.getElementById('pdfPreview').innerHTML = '';
 }
 
 // ==================== NAVEGACIÓN Y MODALES ====================
