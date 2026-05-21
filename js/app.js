@@ -637,19 +637,31 @@ function renderCases() {
       if (!arc) return '';
       const lbl = at==='sup'?'▲ Superior':'▼ Inferior';
       const selSame = selection.caseId===c.id && selection.arcType===at;
+      // Conteo por etapa (resumen)
+      const stageCounts = {0:0,1:0,2:0,3:0};
+      arc.alinStates.forEach(st => { if(st>=0 && st<4) stageCounts[st]++; });
+      const summaryStr = `Impr:${stageCounts[0]} T:${stageCounts[1]} C/P:${stageCounts[2]} Listo:${stageCounts[3]}`;
+      
       const chips = arc.alinStates.map((st,i) => {
         let cls = 'pendiente';
         if(st>=0 && st<4) cls = clsMap[st];
         else if(st===FINAL_STAGE) cls = 'done';
         const sel = selSame && selection.indices.has(i) ? ' selected' : '';
-        const stlUrl = (arc.stlUrls && arc.stlUrls[i]) ? ` <a href="${arc.stlUrls[i]}" target="_blank" title="Descargar STL" onclick="event.stopPropagation()" style="text-decoration:none;font-size:8px">📎</a>` : '';
-        return `<span class="alin-chip ${cls}${sel}" onclick="event.stopPropagation();toggleAlin('${c.id}','${at}',${i})">${i}${st===FINAL_STAGE?'✓':''}${stlUrl}</span>`;
+        // Botón de descarga STL separado
+        const stlButton = (arc.stlUrls && arc.stlUrls[i]) 
+          ? `<a href="${arc.stlUrls[i]}" target="_blank" title="Descargar STL ${i}" onclick="event.stopPropagation()" class="stl-download-btn">📎</a>` 
+          : '';
+        return `<div style="display:inline-flex; align-items:center; gap:2px">
+          <span class="alin-chip ${cls}${sel}" onclick="event.stopPropagation();toggleAlin('${c.id}','${at}',${i})">${i}${st===FINAL_STAGE?'✓':''}</span>
+          ${stlButton}
+        </div>`;
       }).join('');
+      
       const selCount = selSame ? selection.indices.size : 0;
       const actHtml = selCount > 0 ? `
         <div class="arcada-actions">
           <select id="moveTarget-${c.id}-${at}" class="form-input" style="width:auto;padding:4px 8px;font-size:10px">
-            <option value="0">Imprinir</option><option value="1">Termoformar</option>
+            <option value="0">Imprimir</option><option value="1">Termoformar</option>
             <option value="2">Corte/Pulido</option><option value="3">Listo</option>
             <option value="4">Finalizado</option>
           </select>
@@ -657,42 +669,32 @@ function renderCases() {
           <button class="qbtn" style="color:var(--text3)" onclick="clearSelection()">✕</button>
         </div>` : '';
       return `<div class="arcada-block">
-        <div class="arcada-title"><span class="arc-badge ${at}">${lbl}</span><span class="arc-total-lbl">${arc.total} alin.</span></div>
+        <div class="arcada-title">
+          <span class="arc-badge ${at}">${lbl}</span>
+          <span class="arc-total-lbl">${arc.total} alin.</span>
+          <span style="font-size:9px;color:var(--text3);margin-left:8px">${summaryStr}</span>
+        </div>
         <div class="alin-grid">${chips}</div>
         ${actHtml}
         <div style="margin-top:6px"><button class="qbtn" onclick="event.stopPropagation();completeStage('${c.id}','${at}',null)">✓ Completar todo posible</button></div>
       </div>`;
     }).join('');
     return `<div class="case-card ${c.open?'open':''}" id="case-${c.id}">
-  <div class="case-header">
-    <div class="case-info" onclick="toggleCase('${c.id}')">
-      <div class="case-prio-dot" style="background:${dcol[p]}"></div>
-      <div><div class="case-name">${c.patient}</div><div class="case-doctor">${c.doctorId||c.doctor}</div></div>
-    </div>
-    <div class="case-right">
-      ${bmap[p]} <span class="case-days" style="${d<=0?'color:var(--red)':''}">${d<=0?'VENCIDO':d+'d'}</span>
-      <button class="delete-case-btn" onclick="event.stopPropagation();editCase('${c.id}')">✎</button>
-      <button class="delete-case-btn" onclick="event.stopPropagation();deleteCase('${c.id}')">🗑</button>
-      <span class="chevron" onclick="toggleCase('${c.id}')">▶</span>
-    </div>
-  </div>
-  ${c.open ? `<div class="case-body"><div class="arcadas-grid">${arcHtml}</div>${(c.obs || (c.pdfUrls && c.pdfUrls.length)) ? `<div class="obs-note">${c.obs ? `📝 ${c.obs}` : ''}${(c.pdfUrls && c.pdfUrls.length) ? c.pdfUrls.map(p => `<div><a href="${p.url}" target="_blank" title="Descargar PDF">📎 ${p.name}</a></div>`).join('') : ''}</div>` : ''}</div>` : ''}
-</div>`;
+      <div class="case-header">
+        <div class="case-info" onclick="toggleCase('${c.id}')">
+          <div class="case-prio-dot" style="background:${dcol[p]}"></div>
+          <div><div class="case-name">${c.patient}</div><div class="case-doctor">${c.doctorId||c.doctor}</div></div>
+        </div>
+        <div class="case-right">
+          ${bmap[p]} <span class="case-days" style="${d<=0?'color:var(--red)':''}">${d<=0?'VENCIDO':d+'d'}</span>
+          <button class="delete-case-btn" onclick="event.stopPropagation();editCase('${c.id}')">✎</button>
+          <button class="delete-case-btn" onclick="event.stopPropagation();deleteCase('${c.id}')">🗑</button>
+          <span class="chevron" onclick="toggleCase('${c.id}')">▶</span>
+        </div>
+      </div>
+      ${c.open ? `<div class="case-body"><div class="arcadas-grid">${arcHtml}</div>${(c.obs || (c.pdfUrls && c.pdfUrls.length)) ? `<div class="obs-note">${c.obs ? `📝 ${c.obs}` : ''}${(c.pdfUrls && c.pdfUrls.length) ? c.pdfUrls.map(p => `<div><a href="${p.url}" target="_blank" title="Descargar PDF">📎 ${p.name}</a></div>`).join('') : ''}</div>` : ''}</div>` : ''}
+    </div>`;
   }).join('');
-}
-
-function filterByDoctor() { state.doctorFilter = document.getElementById('doctorFilterInput').value; renderCases(); }
-
-function clearSelection() { selection={caseId:null,arcType:null,indices:new Set()}; renderCases(); }
-function toggleAlin(caseId, arcType, idx) {
-  if(selection.caseId!==caseId || selection.arcType!==arcType) {
-    selection = {caseId, arcType, indices: new Set([idx])};
-  } else {
-    if(selection.indices.has(idx)) selection.indices.delete(idx);
-    else selection.indices.add(idx);
-    if(selection.indices.size===0) clearSelection();
-  }
-  renderCases();
 }
 
 
