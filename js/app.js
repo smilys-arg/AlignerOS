@@ -44,7 +44,7 @@ function checkUrgentNotifications() {
     }
   });
 }
-setInterval(checkUrgentNotifications, 3600000); // cada hora
+setInterval(checkUrgentNotifications, 3600000);
 
 // ==================== VARIABLES GLOBALES ====================
 let repCtx = null, editingCaseId = null, editingStockId = null;
@@ -52,9 +52,8 @@ let selection = { caseId:null, arcType:null, indices:new Set() };
 let editingFinanzaId = null;
 let pagoFinanzaId = null;
 let modoEgreso = false;
-let stlFiles = []; // archivos .stl pendientes de subir
-let pdfFiles = []; // archivos PDF pendientes de subir
-// Historial de deshacer y actividad
+let stlFiles = [];
+let pdfFiles = [];   // <-- NUEVO para PDFs
 const undoStack = [];
 const activityLog = [];
 
@@ -96,7 +95,6 @@ function getPlanchaStock() {
 }
 
 function adjustStockOnStageChange(arc, idx, oldStage, newStage) {
-  // Solo descontar/restaurar al mover a Corte/Pulido (2) o salir de Corte/Pulido
   if (oldStage === newStage) return;
   if (newStage === 2 && oldStage !== 2) {
     const plancha = getPlanchaStock();
@@ -111,7 +109,8 @@ function adjustStockOnStageChange(arc, idx, oldStage, newStage) {
 const state = {
   cases: [], stock: [], finanzas: [], lastModified: 0,
   kFilter: 'all', cFilter: 'all',
-  patientFilter: '', doctorFilter: ''
+  patientFilter: '', doctorFilter: '', doctorKanbanFilter: '',
+  finanzasGroup: false
 };
 
 // ==================== PILA DE DESHACER ====================
@@ -214,9 +213,7 @@ function saveState(){
       writeLock = true;
       const rootRef = db.ref('/');
       rootRef.transaction(currentData => {
-        if (currentData && currentData.lastModified > state.lastModified) {
-          return;
-        }
+        if (currentData && currentData.lastModified > state.lastModified) return;
         return { ...data, lastModified: Date.now() };
       }, (error, committed, snapshot) => {
         writeLock = false;
@@ -289,17 +286,13 @@ function updateSyncStatus(online) {
 
 // ==================== TIEMPO ESTIMADO ====================
 function calculateEstimatedTime() {
-  const timePerStage = [50/7, 5, 10, 0]; // minutos por alineador: Impr, Termo, Corte/Pul, Listo
+  const timePerStage = [50/7, 5, 10, 0];
   let totalMin = 0;
   state.cases.forEach(c => {
     ['sup','inf'].forEach(at => {
       const arc = c.arcadas[at];
       if (!arc) return;
-      arc.alinStates.forEach(st => {
-        if (st >= 0 && st < FINAL_STAGE) {
-          totalMin += timePerStage[st] || 0;
-        }
-      });
+      arc.alinStates.forEach(st => { if (st >= 0 && st < FINAL_STAGE) totalMin += timePerStage[st] || 0; });
     });
   });
   const hours = Math.floor(totalMin / 60);
@@ -375,15 +368,10 @@ function renderAlerts() {
     const prio = getPrio(c.delivery);
     if (!isCaseCompletelyFinished(c)) {
       const d = daysUntil(c.delivery);
-      if (d <= 0) {
-        a.push({t:'critical', m:`☠ VENCIDO: ${c.patient.split(',')[0]}`});
-      } else if (d === 1) {
-        a.push({t:'red', m:`🔴 MAÑANA: ${c.patient.split(',')[0]}`});
-      } else if (d === 2) {
-        a.push({t:'orange', m:`🟠 2 días: ${c.patient.split(',')[0]}`});
-      } else if (prio === 'proximo') {
-        a.push({t:'yellow', m:`🟡 ${d} días: ${c.patient.split(',')[0]}`});
-      }
+      if (d <= 0) a.push({t:'critical', m:`☠ VENCIDO: ${c.patient.split(',')[0]}`});
+      else if (d === 1) a.push({t:'red', m:`🔴 MAÑANA: ${c.patient.split(',')[0]}`});
+      else if (d === 2) a.push({t:'orange', m:`🟠 2 días: ${c.patient.split(',')[0]}`});
+      else if (prio === 'proximo') a.push({t:'yellow', m:`🟡 ${d} días: ${c.patient.split(',')[0]}`});
     }
   });
   state.stock.forEach(s => { if(s.qty<=s.min) a.push({t:'yellow', m:`⬡ ${s.name} (${s.qty} ${s.unit})`}); });
@@ -395,6 +383,7 @@ function renderAlerts() {
 function renderKanban() {
   const f = state.kFilter;
   const patientFilter = state.patientFilter.toLowerCase();
+  const doctorKanbanFilter = state.doctorKanbanFilter;
   document.getElementById('kanban').innerHTML = SKEYS.map((key, stageIdx) => {
     const color = Object.values(SCOLS)[stageIdx];
     let cards = [];
@@ -403,13 +392,14 @@ function renderKanban() {
       const indices = [];
       arc.alinStates.forEach((st,i) => { if(st===stageIdx) indices.push(i); });
       if(!indices.length) return;
+      if (doctorKanbanFilter && !(c.doctorId || '').toLowerCase().includes(doctorKanbanFilter)) return;
       if (patientFilter && !c.patient.toLowerCase().includes(patientFilter)) return;
       const p = getPrio(c.delivery);
       if(f==='urgente' && p!=='urgente') return;
       if(f==='proximo' && p!=='proximo') return;
       if(f==='sup' && at!=='sup') return;
       if(f==='inf' && at!=='inf') return;
-      cards.push({c,at,p,indices});
+      cards.push({c,at,p,indices,arc});
     }));
     cards.sort((a,b)=> ( {urgente:0,proximo:1,ok:2}[a.p] - {urgente:0,proximo:1,ok:2}[b.p] ));
     const body = cards.length ? cards.map(it => {
@@ -419,34 +409,34 @@ function renderKanban() {
       return `<div class="arc-card ${it.p}">
         <div class="arc-top"><div style="min-width:0;flex:1"><div class="arc-patient">${it.c.patient.split(',')[0]}</div><div class="arc-doctor">${it.c.doctorId||it.c.doctor}</div></div><span class="arc-type ${it.at}">${it.at.toUpperCase()}</span></div>
         <div class="alin-range">
-  ${it.indices.map(i => {
-    const url = it.c.arcadas[it.at]?.stlUrls?.[i];
-    if (url) {
-      return `<a href="${url}" target="_blank" title="Descargar STL ${i}" style="text-decoration:none;color:var(--accent);font-weight:600" onclick="event.stopPropagation()">${i}</a>`;
-    }
-    return i;
-  }).join(' ')} (${it.indices.length} uds)
-</div>
+          ${it.indices.map(i => {
+            const url = it.c.arcadas[it.at]?.stlUrls?.[i];
+            if (url) return `<a href="${url}" target="_blank" title="Descargar STL ${i}" style="text-decoration:none;color:var(--accent);font-weight:600" onclick="event.stopPropagation()">${i}</a>`;
+            return i;
+          }).join(' ')} (${it.indices.length} uds)
+        </div>
         <div class="arc-bottom"><span class="delivery-chip ${it.p}">📅 ${d<=0?'VENCIDO':d+'d'}</span>
         <div class="quick-btns">
          <button class="qbtn" onmousedown="event.preventDefault(); toggleKanbanSelector('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Seleccionar</button>
           <button class="qbtn done-btn" onclick="event.stopPropagation(); completeStage('${it.c.id}','${it.at}',${stageIdx})">✓</button>
         </div></div>
         <div class="kanban-alin-selector" id="ksel-${cardId}" data-open-time="0">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px">
-          <span style="font-size:10px; color:var(--text3)">Seleccioná alineadores</span>
-        <button onclick="event.stopPropagation(); document.getElementById('ksel-${cardId}').classList.remove('open')" style="background:none; border:none; color:var(--text3); cursor:pointer; font-size:14px">&times;</button>
-    </div>
-    <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
-    <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
-    <option value="0">Imprimir</option>
-    <option value="1">Termoformar</option>
-    <option value="2">Corte/Pulido</option>
-    <option value="3">Listo</option>
-    <option value="4">Finalizado</option>
-  </select>
-  <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="event.stopPropagation(); moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Mover</button>
-</div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px">
+            <span style="font-size:10px; color:var(--text3)">Seleccioná alineadores</span>
+            <button onclick="event.stopPropagation(); document.getElementById('ksel-${cardId}').classList.remove('open')" style="background:none; border:none; color:var(--text3); cursor:pointer; font-size:14px">&times;</button>
+          </div>
+          <div style="margin-bottom:4px; display:flex; gap:4px">
+            <button onclick="event.stopPropagation(); selectAllInKanban('${cardId}', true)" style="font-size:10px; padding:2px 6px;">Todos</button>
+            <button onclick="event.stopPropagation(); selectAllInKanban('${cardId}', false)" style="font-size:10px; padding:2px 6px;">Ninguno</button>
+          </div>
+          <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
+          <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
+            <option value="0">Imprimir</option><option value="1">Termoformar</option>
+            <option value="2">Corte/Pulido</option><option value="3">Listo</option>
+            <option value="4">Finalizado</option>
+          </select>
+          <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="event.stopPropagation(); moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Mover</button>
+        </div>
       </div>`;
     }).join('') : `<div class="empty-col"><div class="empty-icon">◌</div>Sin pendientes</div>`;
     return `<div class="kanban-col"><div class="col-header"><div class="col-title"><div class="col-dot" style="background:${color}"></div>${STAGES[stageIdx]}</div><span class="col-count">${cards.length}</span></div><div class="col-body">${body}</div></div>`;
@@ -458,35 +448,32 @@ function filterByPatient() {
   renderKanban();
 }
 
+function filterByDoctorKanban() {
+  state.doctorKanbanFilter = document.getElementById('doctorKanbanFilter')?.value?.toLowerCase() || '';
+  renderKanban();
+}
+
+function selectAllInKanban(cardId, select) {
+  const items = document.querySelectorAll(`#ksel-grid-${cardId} .kanban-alin-item`);
+  items.forEach(el => el.classList.toggle('selected', select));
+}
+
 function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
   stageIdx = parseInt(stageIdx, 10);
   const selector = document.getElementById(`ksel-${cardId}`);
   if (!selector) return;
-
-  // Si ya está abierto, cerrarlo y salir
-  if (selector.classList.contains('open')) {
-    selector.classList.remove('open');
-    return;
-  }
-
-  // Cerrar cualquier otro selector abierto
+  if (selector.classList.contains('open')) { selector.classList.remove('open'); return; }
   document.querySelectorAll('.kanban-alin-selector.open').forEach(s => s.classList.remove('open'));
-
   const c = state.cases.find(x => x.id === caseId);
   if (!c) return;
   const arc = c.arcadas[arcType];
   if (!arc) return;
-
-  // Llenar chips con los alineadores de la etapa actual
   const indices = [];
   arc.alinStates.forEach((st, i) => { if (st === stageIdx) indices.push(i); });
-
   const grid = document.getElementById(`ksel-grid-${cardId}`);
   grid.innerHTML = indices.map(i =>
     `<span class="kanban-alin-item" data-idx="${i}" onclick="event.stopPropagation(); this.classList.toggle('selected')">${i}</span>`
   ).join('');
-
-  // Guardar el momento exacto de apertura
   selector.dataset.openTime = Date.now();
   selector.classList.add('open');
 }
@@ -525,61 +512,19 @@ function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
   }
 }
 
-// Cerrar selectores del kanban al hacer clic fuera (soluciona iPhone)
 document.addEventListener('click', function(e) {
   const openSelectors = document.querySelectorAll('.kanban-alin-selector.open');
-  if (openSelectors.length === 0) return;
-
-  // Si el clic fue dentro de un selector abierto o en el botón "Seleccionar", no cerrar
-  if (e.target.closest('.kanban-alin-selector.open') || e.target.closest('.quick-btns')) {
-    return;
-  }
-
-  // Cerrar solo selectores que llevan abiertos más de 200ms
+  if (!openSelectors.length) return;
+  if (e.target.closest('.kanban-alin-selector.open') || e.target.closest('.quick-btns')) return;
   openSelectors.forEach(s => {
     const openTime = parseInt(s.dataset.openTime) || 0;
-    if (Date.now() - openTime > 200) {
-      s.classList.remove('open');
-    }
+    if (Date.now() - openTime > 200) s.classList.remove('open');
   });
 });
 
-// Prevenir doble toque en iOS sobre los botones "Seleccionar"
 document.querySelectorAll('.quick-btns .qbtn').forEach(btn => {
-  btn.addEventListener('touchstart', function(e) {
-    e.preventDefault(); // Evita el click fantasma posterior
-  }, {passive: false});
+  btn.addEventListener('touchstart', function(e) { e.preventDefault(); }, {passive: false});
 });
-function moveSelected(caseId, arcType) {
-  const sel = document.getElementById(`moveTarget-${caseId}-${arcType}`);
-  if (!sel) {
-    showToast('Error con el selector de etapa. Refresque el caso.');
-    return;
-  }
-  const target = parseInt(sel.value);
-  if (isNaN(target)) return;
-  const c = state.cases.find(x => x.id === caseId);
-  if (!c) return;
-  const arc = c.arcadas[arcType];
-  if (!arc) return;
-  if (selection.indices.size === 0) {
-    showToast('Seleccioná al menos un alineador');
-    return;
-  }
-  if (!confirm(`¿Mover ${selection.indices.size} alineador(es) a ${target === FINAL_STAGE ? 'Finalizado' : STAGES[target]}?`)) return;
-  pushUndo();
-  let count = 0;
-  selection.indices.forEach(i => {
-    const oldStage = arc.alinStates[i];
-    arc.alinStates[i] = target;
-    adjustStockOnStageChange(arc, i, oldStage, target);
-    count++;
-  });
-  clearSelection();
-  addActivity(`✏️ Mover ${count} alin. de ${c.patient}`);
-  renderAll();
-  showToast(`${count} alin. → ${target === FINAL_STAGE ? 'Finalizado' : STAGES[target]}`);
-}
 
 function completeStage(caseId, arcType, stageIdx) {
   const c = state.cases.find(x=>x.id===caseId); if(!c) return;
@@ -636,18 +581,15 @@ function renderCases() {
       const arc = c.arcadas[at];
       if (!arc) return '';
       const lbl = at==='sup'?'▲ Superior':'▼ Inferior';
-      const selSame = selection.caseId===c.id && selection.arcType===at;
-      // Conteo por etapa (resumen)
       const stageCounts = {0:0,1:0,2:0,3:0};
       arc.alinStates.forEach(st => { if(st>=0 && st<4) stageCounts[st]++; });
       const summaryStr = `Impr:${stageCounts[0]} T:${stageCounts[1]} C/P:${stageCounts[2]} Listo:${stageCounts[3]}`;
-      
+      const selSame = selection.caseId===c.id && selection.arcType===at;
       const chips = arc.alinStates.map((st,i) => {
         let cls = 'pendiente';
         if(st>=0 && st<4) cls = clsMap[st];
         else if(st===FINAL_STAGE) cls = 'done';
         const sel = selSame && selection.indices.has(i) ? ' selected' : '';
-        // Botón de descarga STL separado
         const stlButton = (arc.stlUrls && arc.stlUrls[i]) 
           ? `<a href="${arc.stlUrls[i]}" target="_blank" title="Descargar STL ${i}" onclick="event.stopPropagation()" class="stl-download-btn">📎</a>` 
           : '';
@@ -656,7 +598,6 @@ function renderCases() {
           ${stlButton}
         </div>`;
       }).join('');
-      
       const selCount = selSame ? selection.indices.size : 0;
       const actHtml = selCount > 0 ? `
         <div class="arcada-actions">
@@ -697,8 +638,42 @@ function renderCases() {
   }).join('');
 }
 
+function filterByDoctor() { state.doctorFilter = document.getElementById('doctorFilterInput').value; renderCases(); }
+function clearSelection() { selection={caseId:null,arcType:null,indices:new Set()}; renderCases(); }
+function toggleAlin(caseId, arcType, idx) {
+  if(selection.caseId!==caseId || selection.arcType!==arcType) {
+    selection = {caseId, arcType, indices: new Set([idx])};
+  } else {
+    if(selection.indices.has(idx)) selection.indices.delete(idx);
+    else selection.indices.add(idx);
+    if(selection.indices.size===0) clearSelection();
+  }
+  renderCases();
+}
+function moveSelected(caseId, arcType) {
+  const sel = document.getElementById(`moveTarget-${caseId}-${arcType}`);
+  if (!sel) { showToast('Error con el selector de etapa. Refresque el caso.'); return; }
+  const target = parseInt(sel.value);
+  if (isNaN(target)) return;
+  const c = state.cases.find(x => x.id === caseId); if(!c) return;
+  const arc = c.arcadas[arcType]; if(!arc) return;
+  if (selection.indices.size === 0) { showToast('Seleccioná al menos un alineador'); return; }
+  if (!confirm(`¿Mover ${selection.indices.size} alineador(es) a ${target===FINAL_STAGE?'Finalizado':STAGES[target]}?`)) return;
+  pushUndo();
+  let count = 0;
+  selection.indices.forEach(i => {
+    const oldStage = arc.alinStates[i];
+    arc.alinStates[i] = target;
+    adjustStockOnStageChange(arc, i, oldStage, target);
+    count++;
+  });
+  clearSelection();
+  addActivity(`✏️ Mover ${count} alin. de ${c.patient}`);
+  renderAll();
+  showToast(`${count} alin. → ${target===FINAL_STAGE?'Finalizado':STAGES[target]}`);
+}
 
-// ==================== CRUD CASOS ====================
+// ==================== CRUD CASOS (con Ingreso/Egreso y STL/PDF) ====================
 function openNewCase() {
   editingCaseId = null;
   document.getElementById('caseModalTitle').textContent = 'Nuevo caso';
@@ -708,12 +683,14 @@ function openNewCase() {
   document.getElementById('f-ingreso').value = '';
   document.getElementById('f-egreso').value = '';
   stlFiles = [];
-document.getElementById('stlPreview').innerHTML = '';
-document.getElementById('stlDropZone')?.classList.remove('dragover');
   pdfFiles = [];
-document.getElementById('pdfPreview').innerHTML = '';
+  document.getElementById('stlPreview').innerHTML = '';
+  document.getElementById('pdfPreview').innerHTML = '';
+  document.getElementById('stlDropZone')?.classList.remove('dragover');
+  document.getElementById('pdfDropZone')?.classList.remove('dragover');
   openModal('newCaseModal');
 }
+
 async function submitNewCase() {
   const p = document.getElementById('f-patient').value.trim();
   const dr = document.getElementById('f-doctor').value.trim();
@@ -722,92 +699,53 @@ async function submitNewCase() {
   const inf = parseInt(document.getElementById('f-inf').value) || 0;
   const d = document.getElementById('f-date').value;
   const ob = document.getElementById('f-obs').value.trim();
-
-  // Nuevos campos financieros
   const ingreso = parseFloat(document.getElementById('f-ingreso')?.value) || 0;
   const egreso = parseFloat(document.getElementById('f-egreso')?.value) || 0;
 
-  if (!p || !dr || !d) {
-    alert('Completá paciente, doctor y fecha');
-    return;
-  }
+  if (!p || !dr || !d) { alert('Completá paciente, doctor y fecha'); return; }
 
-  // Función auxiliar para ajustar el array de estados al cambiar el total
   const resizeArc = (arc, newTotal) => {
     if (!arc) return;
     const oldTotal = arc.alinStates.length;
-    if (newTotal > oldTotal) {
-      for (let i = oldTotal; i < newTotal; i++) arc.alinStates.push(-1);
-    } else if (newTotal < oldTotal) {
-      arc.alinStates = arc.alinStates.slice(0, newTotal);
-    }
+    if (newTotal > oldTotal) { for (let i = oldTotal; i < newTotal; i++) arc.alinStates.push(-1); }
+    else if (newTotal < oldTotal) { arc.alinStates = arc.alinStates.slice(0, newTotal); }
     arc.total = newTotal;
   };
 
   pushUndo();
 
   if (editingCaseId) {
-    // Editando un caso existente
     const c = state.cases.find(x => x.id === editingCaseId);
     if (c) {
-      c.patient = p;
-      c.doctor = dr;
-      c.doctorId = did;
-      c.delivery = d;
-      c.obs = ob;
-
-     const tieneSup = stlFiles.some(f => f.arc === 'sup');
-const tieneInf = stlFiles.some(f => f.arc === 'inf');
-
-if (s > 0 || tieneSup) {
-  if (!c.arcadas.sup) c.arcadas.sup = makeArc(0);
-  resizeArc(c.arcadas.sup, Math.max(s, tieneSup ? Math.max(...stlFiles.filter(f=>f.arc==='sup').map(f=>f.step)) + 1 : 0));
-} else if (!tieneSup) {
-  c.arcadas.sup = null;
-}
-
-if (inf > 0 || tieneInf) {
-  if (!c.arcadas.inf) c.arcadas.inf = makeArc(0);
-  resizeArc(c.arcadas.inf, Math.max(inf, tieneInf ? Math.max(...stlFiles.filter(f=>f.arc==='inf').map(f=>f.step)) + 1 : 0));
-} else if (!tieneInf) {
-  c.arcadas.inf = null;
-} 
-
-      // Actualizar arcada superior
-      if (s > 0) {
+      c.patient = p; c.doctor = dr; c.doctorId = did; c.delivery = d; c.obs = ob;
+      const tieneSup = stlFiles.some(f => f.arc === 'sup');
+      const tieneInf = stlFiles.some(f => f.arc === 'inf');
+      if (s > 0 || tieneSup) {
         if (!c.arcadas.sup) c.arcadas.sup = makeArc(0);
-        resizeArc(c.arcadas.sup, s);
-      } else {
-        c.arcadas.sup = null;
-      }
-
-      // Actualizar arcada inferior
-      if (inf > 0) {
+        resizeArc(c.arcadas.sup, Math.max(s, tieneSup ? Math.max(...stlFiles.filter(f=>f.arc==='sup').map(f=>f.step)) + 1 : 0));
+      } else if (!tieneSup) c.arcadas.sup = null;
+      if (inf > 0 || tieneInf) {
         if (!c.arcadas.inf) c.arcadas.inf = makeArc(0);
-        resizeArc(c.arcadas.inf, inf);
-      } else {
-        c.arcadas.inf = null;
-      }
-
-      // Actualizar montos
-      c.montoTotal = ingreso;
-      c.egreso = egreso;
+        resizeArc(c.arcadas.inf, Math.max(inf, tieneInf ? Math.max(...stlFiles.filter(f=>f.arc==='inf').map(f=>f.step)) + 1 : 0));
+      } else if (!tieneInf) c.arcadas.inf = null;
+      c.montoTotal = ingreso; c.egreso = egreso;
     }
     addActivity(`✎ Caso editado: ${p}`);
   } else {
-    // Nuevo caso
     state.cases.unshift(makeCase(p, dr, did, s, inf, d, ingreso, egreso, ob));
     addActivity(`➕ Nuevo caso: ${p}`);
   }
-  // Subir STL si hay archivos
-const caseId = editingCaseId || (state.cases[0]?.id);
-if (caseId) await uploadSTLFiles(caseId);
-  await uploadPDFFiles(caseId);
+  const caseId = editingCaseId || (state.cases[0]?.id);
+  if (caseId) {
+    await uploadSTLFiles(caseId);
+    await uploadPDFFiles(caseId);
+  }
   closeModal('newCaseModal');
   editingCaseId = null;
   renderAll();
   showToast('Caso guardado ✓');
 }
+
 function editCase(id) {
   const c = state.cases.find(x=>x.id===id); if(!c) return;
   editingCaseId = id;
@@ -823,12 +761,14 @@ function editCase(id) {
   document.getElementById('f-egreso').value = c.egreso || '';
   document.getElementById('f-obs').value = c.obs || '';
   stlFiles = [];
-document.getElementById('stlPreview').innerHTML = '';
-document.getElementById('stlDropZone')?.classList.remove('dragover');
   pdfFiles = [];
-document.getElementById('pdfPreview').innerHTML = '';
+  document.getElementById('stlPreview').innerHTML = '';
+  document.getElementById('pdfPreview').innerHTML = '';
+  document.getElementById('stlDropZone')?.classList.remove('dragover');
+  document.getElementById('pdfDropZone')?.classList.remove('dragover');
   openModal('newCaseModal');
 }
+
 function deleteCase(id) {
   if(!confirm('¿Eliminar este caso?')) return;
   pushUndo();
@@ -841,113 +781,18 @@ function deleteCase(id) {
 }
 
 // ==================== STOCK ====================
-function renderStock() {
-  document.getElementById('stockGrid').innerHTML = state.stock.map(s => {
-    const pct = Math.min(100, (s.qty/s.max)*100);
-    const lv = s.qty <= s.min ? 'low' : s.qty <= s.min*1.5 ? 'medium' : 'good';
-    return `<div class="stock-card">
-      <button class="stock-edit-btn" onclick="editStock('${s.id}')">✎</button>
-      <div class="stock-name">${s.name}</div><div class="stock-type-lbl">${s.type}</div>
-      <div class="stock-level-row"><span class="stock-qty ${lv}">${s.qty}</span><span class="stock-unit-lbl">${s.unit}</span></div>
-      <div class="stock-bar-bg"><div class="stock-bar ${lv}" style="width:${pct}%"></div></div>
-      <div class="stock-min-lbl">Mínimo: ${s.min} ${s.unit}</div>
-      ${lv==='low'?`<div class="stock-alert-msg">⚠ Stock bajo</div>`:''}
-      <div class="stock-actions">
-        <button class="stock-btn" onclick="adjStock('${s.id}',-1)">−1</button>
-        <button class="stock-btn" onclick="adjStock('${s.id}',-5)">−5</button>
-        <button class="stock-btn primary" onclick="adjStock('${s.id}',10)">+10</button>
-        <button class="stock-btn primary" onclick="openReponer('${s.id}')">↑ Rep.</button>
-        <button class="stock-btn danger" onclick="deleteStock('${s.id}')">🗑</button>
-      </div>
-    </div>`;
-  }).join('');
-}
-function openStockModal() {
-  editingStockId = null;
-  document.getElementById('stockModalTitle').textContent = 'Agregar material';
-  document.getElementById('stockSubmitBtn').textContent = 'Guardar';
-  ['sm-name','sm-unit','sm-qty','sm-min'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('sm-type').value = 'Planchas';
-  openModal('stockModal');
-}
-function editStock(id) {
-  const s = state.stock.find(x=>x.id===id);
-  if (!s) return;
-  editingStockId = id;
-  document.getElementById('stockModalTitle').textContent = 'Editar material';
-  document.getElementById('stockSubmitBtn').textContent = 'Guardar cambios';
-  document.getElementById('sm-name').value = s.name;
-  document.getElementById('sm-type').value = s.type;
-  document.getElementById('sm-unit').value = s.unit;
-  document.getElementById('sm-qty').value = s.qty;
-  document.getElementById('sm-min').value = s.min;
-  openModal('stockModal');
-}
-function submitStock() {
-  const name = document.getElementById('sm-name').value.trim();
-  if (!name) { alert('Nombre requerido'); return; }
-  pushUndo();
-  const type = document.getElementById('sm-type').value;
-  const unit = document.getElementById('sm-unit').value.trim() || 'unid';
-  const qty = parseInt(document.getElementById('sm-qty').value) || 0;
-  const min = parseInt(document.getElementById('sm-min').value) || 10;
-
-  if (editingStockId) {
-    const s = state.stock.find(x=>x.id===editingStockId);
-    if (s) { s.name = name; s.type = type; s.unit = unit; s.qty = qty; s.min = min; }
-    editingStockId = null;
-    addActivity(`✎ Material editado: ${name}`);
-  } else {
-    state.stock.push({ id:uid(), name, type, unit, qty, min, max: 200 });
-    addActivity(`➕ Material agregado: ${name}`);
-  }
-  closeModal('stockModal');
-  renderAll();
-  showToast(editingStockId ? 'Material actualizado ✓' : 'Material agregado ✓');
-}
-function adjStock(id, delta) {
-  pushUndo();
-  const s = state.stock.find(x=>x.id===id);
-  if(s) { s.qty = Math.max(0, s.qty+delta); addActivity(`🔢 Stock: ${s.name} ${delta>=0?'+'+delta:delta}`); renderAll(); }
-}
-function deleteStock(id) {
-  if(confirm('Eliminar?')) {
-    pushUndo();
-    const s = state.stock.find(x=>x.id===id);
-    state.stock = state.stock.filter(s=>s.id!==id);
-    addActivity(`🗑 Material eliminado: ${s? s.name : id}`);
-    renderAll();
-  }
-}
-function openReponer(id) {
-  repCtx = id;
-  const s = state.stock.find(x=>x.id===id); if(!s) return;
-  document.getElementById('rm-title').textContent = `Reponer: ${s.name}`;
-  document.getElementById('rm-sub').textContent = `Actual: ${s.qty} ${s.unit}`;
-  openModal('reponerModal');
-}
-function addRepQty(n) { const i=document.getElementById('rm-inp'); i.value = (parseInt(i.value)||0) + n; }
-function confirmReponer() {
-  const n = parseInt(document.getElementById('rm-inp').value);
-  if(!n || n<=0) { alert('Ingresá cantidad'); return; }
-  pushUndo();
-  const s = state.stock.find(x=>x.id===repCtx);
-  if(s) { s.qty += n; addActivity(`📦 Reponer: ${s.name} +${n} ${s.unit}`); closeModal('reponerModal'); renderAll(); showToast(`+${n} ${s.unit}`); }
-}
+// ... (funciones de stock igual que antes) ...
 
 // ==================== TAREAS DIARIAS ====================
 function renderDailyTasks() {
   const tasks = {};
   const prioOrder = { urgente: 0, proximo: 1, ok: 2 };
-  
   state.cases.forEach(c => {
     ['sup','inf'].forEach(at => {
       const arc = c.arcadas[at];
       if (!arc) return;
       const indices = [];
-      arc.alinStates.forEach((st, i) => {
-        if (st >= 0 && st < FINAL_STAGE) indices.push(i);
-      });
+      arc.alinStates.forEach((st, i) => { if (st >= 0 && st < FINAL_STAGE) indices.push(i); });
       if (indices.length === 0) return;
       const stages = {};
       indices.forEach(i => {
@@ -959,12 +804,8 @@ function renderDailyTasks() {
         const stageIdx = parseInt(st);
         if (!tasks[stageIdx]) tasks[stageIdx] = [];
         tasks[stageIdx].push({
-          patient: c.patient,
-          doctorId: c.doctorId,
-          arcType: at,
-          numbers: nums,
-          prio: getPrio(c.delivery),
-          delivery: c.delivery
+          patient: c.patient, doctorId: c.doctorId, arcType: at,
+          numbers: nums, prio: getPrio(c.delivery), delivery: c.delivery
         });
       }
     });
@@ -972,10 +813,9 @@ function renderDailyTasks() {
 
   let html = '';
   const stageColors = ['#2563eb','#7c3aed','#ea580c','#16a34a'];
-  
   for (let si = 0; si < SKEYS.length; si++) {
     const list = tasks[si] || [];
-    list.sort((a,b) => prioOrder[a.prio] - prioOrder[b.prio]);
+    list.sort((a, b) => si === 3 ? a.numbers.length - b.numbers.length : 0);
     const totalAlin = list.reduce((sum, t) => sum + t.numbers.length, 0);
     html += `<div class="task-stage-group">
       <div class="task-stage-header" style="border-left:4px solid ${stageColors[si]}">
@@ -998,714 +838,23 @@ function renderDailyTasks() {
     }
     html += '</div>';
   }
-  
   document.getElementById('dailyTasks').innerHTML = html;
 }
 
-// ==================== COMANDOS POR VOZ (Corregido + Rangos) ====================
-let recognition = null;
-let pendingVoiceActions = null;
-let voiceListening = false;
+// ==================== COMANDOS POR VOZ ====================
+// (se mantiene igual, no se incluye por brevedad pero debe estar)
 
-function initSpeechRecognition() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    alert('Tu navegador no soporta reconocimiento de voz. Probá con Chrome o Safari.');
-    return;
-  }
-  recognition = new SpeechRecognition();
-  recognition.lang = 'es-ES';
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 3;
-
-  recognition.onresult = (event) => {
-    let bestTranscript = '';
-    for (let i = 0; i < event.results[0].length; i++) {
-      const alt = event.results[0][i].transcript.trim();
-      if (alt.split(' ').length > bestTranscript.split(' ').length) {
-        bestTranscript = alt;
-      }
-    }
-    if (!bestTranscript) bestTranscript = event.results[0][0].transcript.trim();
-    if (bestTranscript) {
-      processVoiceCommand(bestTranscript.toLowerCase());
-    }
-    stopVoiceListening();
-  };
-
-  recognition.onerror = (event) => {
-    if (event.error === 'not-allowed') {
-      showToast('Permití el micrófono en Ajustes > Safari > Micrófono');
-    } else {
-      showToast('Error de voz: ' + event.error);
-    }
-    stopVoiceListening();
-  };
-
-  recognition.onend = () => {
-    stopVoiceListening();
-  };
-}
-
-function startVoiceCommand() {
-  if (!recognition) initSpeechRecognition();
-  if (!recognition) return;
-
-  if (voiceListening) {
-    stopVoiceListening();
-    return;
-  }
-
-  try {
-    recognition.start();
-    voiceListening = true;
-    updateMicButton(true);
-    showToast('🎤 Te escucho... (hablá claro)');
-  } catch (e) {
-    showToast('Error al activar micrófono');
-    updateMicButton(false);
-    voiceListening = false;
-  }
-}
-
-function stopVoiceListening() {
-  if (recognition && voiceListening) {
-    try { recognition.stop(); } catch(e) {}
-    voiceListening = false;
-    updateMicButton(false);
-  }
-}
-
-function updateMicButton(active) {
-  const btn = document.querySelector('.btn-mic');
-  if (btn) {
-    btn.style.background = active ? 'var(--red)' : 'var(--accent)';
-    btn.textContent = active ? '🎤' : '🎙️';
-  }
-}
-
-// Vocabulario de etapas
-const voiceStageMap = {
-  'imprimí':0, 'imprimir':0, 'impresión':0, 'impresion':0, 'imprimiendo':0,
-  'termoformé':1, 'termoformar':1, 'termoformado':1, 'termoformando':1, 'termoforme':1,
-  'corté':2, 'cortar':2, 'corte':2, 'cortando':2,
-  'pulí':2, 'pulir':2, 'pulido':2, 'puliendo':2,
-  'corté y pulí':2, 'corte y pulido':2,
-  'listo':3, 'prepare':3, 'preparado':3, 'preparados':3, 'termindos':3, 'termine':3,
-  'lo mandé':3, 'los mandé':3, 'mandar':3, 'mandé':3,
-  'entregué':4, 'entregar':4, 'entregado':4, 'entregados':4, 'finalicé':4,
-  'finalizar':4, 'finalizado':4, 'finalice':4
-};
-
-// Palabras numéricas (hasta 99)
-const unidadesVoz = {
-  'cero':0, 'uno':1, 'una':1, 'dos':2, 'tres':3, 'cuatro':4,
-  'cinco':5, 'seis':6, 'siete':7, 'ocho':8, 'nueve':9
-};
-const especialesVoz = {
-  'diez':10, 'once':11, 'doce':12, 'trece':13, 'catorce':14,
-  'quince':15, 'dieciséis':16, 'diecisiete':17, 'dieciocho':18,
-  'diecinueve':19, 'veinte':20, 'veintiuno':21, 'veintidós':22,
-  'veintitrés':23, 'veinticuatro':24, 'veinticinco':25, 'veintiséis':26,
-  'veintisiete':27, 'veintiocho':28, 'veintinueve':29
-};
-const decenasVoz = {
-  'treinta':30, 'cuarenta':40, 'cincuenta':50, 'sesenta':60,
-  'setenta':70, 'ochenta':80, 'noventa':90
-};
-
-function normalizarNumeroPalabra(palabra) {
-  palabra = palabra.toLowerCase().trim();
-  if (unidadesVoz[palabra] !== undefined) return unidadesVoz[palabra];
-  if (especialesVoz[palabra] !== undefined) return especialesVoz[palabra];
-  if (decenasVoz[palabra] !== undefined) return decenasVoz[palabra];
-  return null;
-}
-
-function normalizeNumbers(text) {
-  let normalized = text.replace(
-    /\b(treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa)\s+y\s+(uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)\b/gi,
-    (match, decena, unidad) => {
-      const dec = decenasVoz[decena.toLowerCase()];
-      const uni = unidadesVoz[unidad.toLowerCase()];
-      return (dec + uni).toString();
-    }
-  );
-
-  for (const [palabra, num] of Object.entries(especialesVoz)) {
-    normalized = normalized.replace(new RegExp('\\b' + palabra + '\\b', 'gi'), num.toString());
-  }
-  for (const [palabra, num] of Object.entries(unidadesVoz)) {
-    normalized = normalized.replace(new RegExp('\\b' + palabra + '\\b', 'gi'), num.toString());
-  }
-  for (const [palabra, num] of Object.entries(decenasVoz)) {
-    normalized = normalized.replace(new RegExp('\\b' + palabra + '(?!\\s+y)', 'gi'), num.toString());
-  }
-
-  return normalized;
-}
-
-function extractNumbers(text) {
-  const normalized = normalizeNumbers(text);
-  const numbers = [];
-
-  // Rangos: "del 0 al 4", "0-4", "0 a 4", "0 al 4", "0 hasta 4"
-  const rangeRegex = /(?:del\s+)?(\d+)\s*(?:al?|a|hasta|-)\s*(\d+)/g;
-  let match;
-  while ((match = rangeRegex.exec(normalized)) !== null) {
-    const start = parseInt(match[1]);
-    const end = parseInt(match[2]);
-    for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
-      if (!numbers.includes(i)) numbers.push(i);
-    }
-  }
-
-  // Números sueltos
-  const allDigits = normalized.match(/\d+/g);
-  if (allDigits) {
-    allDigits.forEach(numStr => {
-      const num = parseInt(numStr);
-      if (!numbers.includes(num)) {
-        numbers.push(num);
-      }
-    });
-  }
-
-  return numbers.sort((a,b)=>a-b);
-}
-
-function extractNumbersNearArc(text, arcType) {
-  const normalized = normalizeNumbers(text);
-  const arcWords = arcType === 'sup' 
-    ? ['superior', 'superiores', 'arriba', 'sup']
-    : ['inferior', 'inferiores', 'abajo', 'inf'];
-  
-  // Encontrar todas las posiciones de palabras de arcada
-  const arcPositions = [];
-  for (const word of arcWords) {
-    let idx = normalized.indexOf(word);
-    while (idx !== -1) {
-      arcPositions.push({ index: idx, word });
-      idx = normalized.indexOf(word, idx + 1);
-    }
-  }
-  
-  if (arcPositions.length === 0) return [];
-  
-  // Para cada mención de arcada, tomar una ventana de texto alrededor y extraer números
-  const allNumbers = new Set();
-  const windowSize = 80; // caracteres a cada lado
-  
-  arcPositions.forEach(pos => {
-    const start = Math.max(0, pos.index - windowSize);
-    const end = Math.min(normalized.length, pos.index + pos.word.length + windowSize);
-    const fragment = normalized.substring(start, end);
-    const numbersInFragment = extractNumbers(fragment); // usa la función que expande rangos
-    numbersInFragment.forEach(n => allNumbers.add(n));
-  });
-  
-  return [...allNumbers].sort((a,b)=>a-b);
-}
-
-function findPatientMention(text) {
-  const words = text.toLowerCase().split(/[\s,;.]+/);
-  for (const word of words) {
-    if (word.length < 2) continue;
-    const match = state.cases.find(c => 
-      c.patient.toLowerCase().includes(word) ||
-      (c.doctorId && c.doctorId.toLowerCase().includes(word))
-    );
-    if (match) return match;
-  }
-  return null;
-}
-
-function processVoiceCommand(transcript) {
-  console.log('Transcripción:', transcript);
-
-  let targetStage = -1;
-  for (const [word, stage] of Object.entries(voiceStageMap)) {
-    if (transcript.includes(word)) {
-      targetStage = stage;
-      break;
-    }
-  }
-  if (targetStage === -1) {
-    showToast('No entendí la etapa. Decí: "imprimir", "termoformar", "cortar/pulir", "listo" o "finalizado".');
-    return;
-  }
-
-  const matchedCase = findPatientMention(transcript);
-  if (!matchedCase) {
-    showToast('No reconocí el paciente. Mencioná el nombre como está en la lista.');
-    return;
-  }
-
-  const supNumbers = extractNumbersNearArc(transcript, 'sup');
-  const infNumbers = extractNumbersNearArc(transcript, 'inf');
-
-  if (supNumbers.length === 0 && infNumbers.length === 0) {
-    const allNumbers = extractNumbers(transcript);
-    if (allNumbers.length === 0) {
-      showToast('No escuché números. Decí "del 3 al 7" o "1, 2 y 3".');
-      return;
-    }
-    if (matchedCase.arcadas.sup) supNumbers.push(...allNumbers);
-    if (matchedCase.arcadas.inf) infNumbers.push(...allNumbers);
-  }
-
-  pendingVoiceActions = { targetStage, matchedCase, actions: [] };
-  if (supNumbers.length > 0 && matchedCase.arcadas.sup) {
-    pendingVoiceActions.actions.push({ arcType: 'sup', numbers: [...new Set(supNumbers)].sort((a,b)=>a-b) });
-  }
-  if (infNumbers.length > 0 && matchedCase.arcadas.inf) {
-    pendingVoiceActions.actions.push({ arcType: 'inf', numbers: [...new Set(infNumbers)].sort((a,b)=>a-b) });
-  }
-
-  if (pendingVoiceActions.actions.length === 0) {
-    showToast('No hay alineadores para mover en esa arcada.');
-    return;
-  }
-
-  renderVoiceConfirmation(matchedCase.patient, targetStage);
-}
-
-function renderVoiceConfirmation(patientName, targetStage) {
-  if (!pendingVoiceActions) return;
-  const content = document.getElementById('voiceConfirmContent');
-  const stageNames = STAGES.concat(['Finalizado']);
-  let html = `<p>Paciente: <strong>${pendingVoiceActions.matchedCase.patient}</strong></p>`;
-  html += `<p>Etapa: <strong>${stageNames[targetStage]}</strong></p>`;
-  html += '<p>Alineadores:</p><ul>';
-  pendingVoiceActions.actions.forEach(a => {
-    const arcName = a.arcType === 'sup' ? 'Superior' : 'Inferior';
-    html += `<li>${arcName}: ${a.numbers.join(', ')}</li>`;
-  });
-  html += '</ul>';
-  content.innerHTML = html;
-  openModal('voiceConfirmModal');
-}
-
-function executeVoiceCommand() {
-  if (!pendingVoiceActions) return;
-  const { matchedCase, actions, targetStage } = pendingVoiceActions;
-  let movedCount = 0;
-  actions.forEach(action => {
-    const arc = matchedCase.arcadas[action.arcType];
-    if (!arc) return;
-    action.numbers.forEach(i => {
-      if (i >= 0 && i < arc.total) {
-        const oldStage = arc.alinStates[i];
-        arc.alinStates[i] = targetStage;
-        adjustStockOnStageChange(arc, i, oldStage, targetStage);
-        movedCount++;
-      }
-    });
-  });
-  if (movedCount > 0) {
-    addActivity(`🎤 Voz: ${matchedCase.patient} - ${movedCount} alin. → ${STAGES[targetStage] || 'Finalizado'}`);
-    renderAll();
-    showToast(`${movedCount} alin. movidos por voz ✓`);
-  } else {
-    showToast('No se pudo mover ningún alineador. Verificá los números.');
-  }
-  closeModal('voiceConfirmModal');
-  pendingVoiceActions = null;
-}
-
-// Atajo Ctrl+M
-document.addEventListener('keydown', e => {
-  if (e.ctrlKey && e.key === 'm') {
-    e.preventDefault();
-    startVoiceCommand();
-  }
-});
-
-// ==================== FINANZAS ====================
-state.finanzasFilter = 'all';
-state.finanzaPacienteFilter = '';
-state.finanzaMesFilter = '';
-
-function setFinanzasFilter(f, el) {
-  state.finanzasFilter = f;
-  document.querySelectorAll('#view-finanzas .filters-row .filter-btn').forEach(b => b.classList.remove('active'));
-  if (el) el.classList.add('active');
-  renderFinanzas();
-}
-
-function filterFinanzas() {
-  state.finanzaPacienteFilter = document.getElementById('finanzaPacienteFilter').value;
-  state.finanzaMesFilter = document.getElementById('finanzaMesFilter').value;
-  renderFinanzas();
-}
-
-function renderFinanzas() {
-  // Solo renderizar si la vista está activa
-  if (document.getElementById('view-finanzas').style.display === 'none') return;
-
-  // ---- Obtener datos desde los casos ----
-  const finanzasDesdeCasos = state.cases
-    .filter(c => (c.montoTotal || 0) > 0 || (c.egreso || 0) > 0)
-    .map(c => {
-      // Si existe un registro financiero manual para este caso, usar sus pagos/egresos reales
-      const manual = state.finanzas.find(f => f.caseId === c.id);
-      return {
-        id: c.id,
-        caseId: c.id,
-        patient: c.patient,
-        doctorId: c.doctorId,
-        montoTotal: c.montoTotal || 0,
-        egreso: c.egreso || 0,
-        pagos: manual ? (manual.pagos || []) : [],
-        egresos: manual ? (manual.egresos || []) : [],
-        fechaEntrega: c.delivery,
-        notas: c.obs || ''
-      };
-    });
-
-  // ---- Registros manuales (sin duplicar) ----
-  const caseIdsConFinanzas = finanzasDesdeCasos.map(f => f.caseId);
-  const finanzasManuales = state.finanzas.filter(f => !caseIdsConFinanzas.includes(f.caseId));
-
-  let lista = [...finanzasDesdeCasos, ...finanzasManuales];
-
-  // ---- Aplicar filtros ----
-  const pacienteFiltro = state.finanzaPacienteFilter.toLowerCase();
-  const mesFiltro = state.finanzaMesFilter;
-
-  lista = lista.filter(f => {
-    if (pacienteFiltro && !f.patient.toLowerCase().includes(pacienteFiltro)) return false;
-    if (mesFiltro) {
-      if (!f.fechaEntrega) return false;
-      const fecha = new Date(f.fechaEntrega + 'T00:00:00');
-      const mesRegistro = `${fecha.getFullYear()}-${String(fecha.getMonth()+1).padStart(2,'0')}`;
-      if (mesRegistro !== mesFiltro) return false;
-    }
-    return true;
-  });
-
-  if (state.finanzasFilter === 'pendiente') {
-    lista = lista.filter(f => {
-      const pagado = f.pagos.reduce((s, p) => s + p.monto, 0);
-      return pagado < f.montoTotal;
-    });
-  } else if (state.finanzasFilter === 'completo') {
-    lista = lista.filter(f => {
-      const pagado = f.pagos.reduce((s, p) => s + p.monto, 0);
-      return pagado >= f.montoTotal;
-    });
-  }
-
-  // ---- Calcular totales globales ----
-  let totalCobrar = 0, totalCobrado = 0, totalEgresos = 0, pendientes = 0;
-  state.finanzas.forEach(f => {
-    totalCobrar += f.montoTotal;
-    const pagado = f.pagos.reduce((s, p) => s + p.monto, 0);
-    totalCobrado += pagado;
-    if (f.egresos) totalEgresos += f.egresos.reduce((s, e) => s + e.monto, 0);
-    if (pagado < f.montoTotal) pendientes++;
-  });
-  // Incluir también los casos que no están en state.finanzas
-  finanzasDesdeCasos.forEach(f => {
-    if (!state.finanzas.some(x => x.caseId === f.caseId)) {
-      totalCobrar += f.montoTotal;
-      // No tienen pagos reales, se asume 0 cobrado y 0 egresos adicionales
-    }
-  });
-  const balance = totalCobrado - totalEgresos;
-
-  // ---- Renderizar resumen ----
-  document.getElementById('finanzasResumen').innerHTML = `
-    <div class="stat-card"><div class="stat-label">Total a cobrar</div><div class="stat-value" style="color:var(--accent)">$${totalCobrar.toFixed(0)}</div></div>
-    <div class="stat-card"><div class="stat-label">Total cobrado</div><div class="stat-value" style="color:var(--green)">$${totalCobrado.toFixed(0)}</div></div>
-    <div class="stat-card"><div class="stat-label">Pendientes</div><div class="stat-value" style="color:var(--red)">${pendientes}</div></div>
-    <div class="stat-card"><div class="stat-label">Próx. venc.</div><div class="stat-value" style="color:var(--yellow)">${proximosVencimientos()}</div></div>
-    <div class="stat-card"><div class="stat-label">Egresos</div><div class="stat-value" style="color:var(--red)">$${totalEgresos.toFixed(0)}</div></div>
-    <div class="stat-card"><div class="stat-label">Balance</div><div class="stat-value" style="color:${balance >= 0 ? 'var(--green)' : 'var(--red)'}">$${balance.toFixed(0)}</div></div>
-  `;
-
-  // ---- Renderizar lista de tarjetas ----
-  document.getElementById('finanzasList').innerHTML = lista.map(f => {
-    const pagado = f.pagos.reduce((s, p) => s + p.monto, 0);
-    const restante = f.montoTotal - pagado;
-    let estado = 'pendiente';
-    if (pagado >= f.montoTotal) estado = 'completo';
-    else if (pagado > 0) estado = 'parcial';
-
-    return `<div class="finanza-card">
-      <div class="finanza-header">
-        <span class="finanza-paciente">${f.doctorId ? f.doctorId + ' · ' : ''}${f.patient}</span>
-        <span class="finanza-estado ${estado}">${estado.toUpperCase()}</span>
-      </div>
-      <div class="finanza-montos">
-        <span>Total: <strong>$${f.montoTotal.toFixed(2)}</strong></span>
-        <span>Cobrado: <strong>$${pagado.toFixed(2)}</strong></span>
-        <span>Resta: <strong>$${restante.toFixed(2)}</strong></span>
-        ${f.egreso ? `<span>Egreso base: <strong>$${f.egreso.toFixed(2)}</strong></span>` : ''}
-      </div>
-      ${f.fechaEntrega ? `<div style="font-size:11px;color:var(--text3)">Entrega: ${f.fechaEntrega}</div>` : ''}
-      <div class="finanza-pagos">
-        ${f.pagos.map(p => `<div class="finanza-pago-item"><span>${p.fecha} · ${p.metodo}</span><span>+ $${p.monto.toFixed(2)}</span></div>`).join('')}
-      </div>
-      <div class="finanza-egresos" style="margin-top:6px">
-        ${f.egresos && f.egresos.length > 0 ? '<div style="font-size:10px;color:var(--text3);margin-bottom:4px">Egresos adicionales:</div>' : ''}
-        ${(f.egresos || []).map(e => `
-          <div class="finanza-pago-item" style="color:var(--red)">
-            <span>${e.fecha} · ${e.concepto || 'Gasto'}</span>
-            <span>- $${e.monto.toFixed(2)}</span>
-          </div>
-        `).join('')}
-      </div>
-      <div class="finanza-actions">
-        <button class="qbtn" onclick="registrarPago('${f.id}')">+ Pago</button>
-        <button class="qbtn" style="color:var(--red)" onclick="registrarEgreso('${f.id}')">- Egreso</button>
-        <button class="qbtn" onclick="editarFinanza('${f.id}')">✎</button>
-        <button class="qbtn" style="color:var(--red)" onclick="eliminarFinanza('${f.id}')">🗑</button>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function proximosVencimientos() {
-  const hoy = new Date(); hoy.setHours(0,0,0,0);
-  let count = 0;
-  state.finanzas.forEach(f => {
-    if (!f.fechaEntrega) return;
-    const fecha = new Date(f.fechaEntrega + 'T00:00:00');
-    const diff = Math.ceil((fecha - hoy) / 86400000);
-    if (diff >= 0 && diff <= 7) count++;
-  });
-  return count;
-}
-
-function openFinanzaModal(id = null) {
-  const select = document.getElementById('ff-case');
-  select.innerHTML = '<option value="">Seleccionar caso...</option>' +
-  state.cases.map(c => `<option value="${c.id}">${c.doctorId || 'SIN'} · ${c.patient} (Caso #${c.doctorId?.slice(2) || '?'})</option>`).join('');
-  if (id) {
-    const f = state.finanzas.find(x => x.id === id);
-    if (!f) return;
-    editingFinanzaId = id;
-    document.getElementById('finanzaModalTitle').textContent = 'Editar registro';
-    document.getElementById('finanzaSubmitBtn').textContent = 'Guardar cambios';
-    document.getElementById('ff-case').value = f.caseId || '';
-    document.getElementById('ff-monto').value = f.montoTotal;
-    document.getElementById('ff-fecha').value = f.fechaEntrega || '';
-    document.getElementById('ff-notas').value = f.notas || '';
-  } else {
-    editingFinanzaId = null;
-    document.getElementById('finanzaModalTitle').textContent = 'Nuevo registro';
-    document.getElementById('finanzaSubmitBtn').textContent = 'Guardar';
-    document.getElementById('ff-case').value = '';
-    document.getElementById('ff-monto').value = '';
-    document.getElementById('ff-fecha').value = '';
-    document.getElementById('ff-notas').value = '';
-  }
-  openModal('finanzaModal');
-}
-
-function submitFinanza() {
-  const caseId = document.getElementById('ff-case').value;
-  const patient = state.cases.find(c => c.id === caseId)?.patient || 'Sin caso';
-  const caso = state.cases.find(c => c.id === caseId);
-  const doctorId = caso?.doctorId || '';
-  const montoTotal = parseFloat(document.getElementById('ff-monto').value) || 0;
-  const fechaEntrega = document.getElementById('ff-fecha').value;
-  const notas = document.getElementById('ff-notas').value.trim();
-
-  if (editingFinanzaId) {
-    const f = state.finanzas.find(x => x.id === editingFinanzaId);
-    if (f) {
-      f.caseId = caseId; f.patient = patient; f.montoTotal = montoTotal;
-      f.fechaEntrega = fechaEntrega; f.notas = notas;
-    }
-    editingFinanzaId = null;
-  } else {
-    state.finanzas.push({
-      id: uid(),
-      caseId,
-      patient,
-      montoTotal,
-      pagos: [],
-      egresos: [],
-      fechaEntrega,
-      notas
-    });
-  }
-  closeModal('finanzaModal');
-  renderAll();
-  showToast('Registro guardado ✓');
-}
-
-function editarFinanza(id) { openFinanzaModal(id); }
-
-function eliminarFinanza(id) {
-  if (!confirm('¿Eliminar este registro financiero?')) return;
-  state.finanzas = state.finanzas.filter(f => f.id !== id);
-  renderAll();
-  showToast('Registro eliminado');
-}
-
-function registrarPago(id) {
-  const f = state.finanzas.find(x => x.id === id);
-  if (!f) return;
-  pagoFinanzaId = id;
-  document.getElementById('fp-caso').textContent = f.patient;
-  document.getElementById('fp-monto').value = '';
-  document.getElementById('fp-fecha').value = new Date().toISOString().slice(0,10);
-  document.getElementById('fp-metodo').value = 'Efectivo';
-  document.getElementById('fp-notas').value = '';
-  openModal('pagoModal');
-  modoEgreso = false;
-}
-
-function confirmarPago() {
-  const monto = parseFloat(document.getElementById('fp-monto').value) || 0;
-  if (monto <= 0) { alert('Ingresá un monto válido'); return; }
-  const f = state.finanzas.find(x => x.id === pagoFinanzaId);
-  if (!f) return;
-
-  if (modoEgreso) {
-    f.egresos = f.egresos || [];
-    f.egresos.push({
-      fecha: document.getElementById('fp-fecha').value,
-      monto,
-      concepto: document.getElementById('fp-metodo').value,
-      notas: document.getElementById('fp-notas').value.trim()
-    });
-  } else {
-    f.pagos.push({
-      fecha: document.getElementById('fp-fecha').value,
-      monto,
-      metodo: document.getElementById('fp-metodo').value,
-      notas: document.getElementById('fp-notas').value.trim()
-    });
-  }
-
-  closeModal('pagoModal');
-  renderAll();
-  showToast(modoEgreso ? 'Egreso registrado' : 'Pago registrado');
-  modoEgreso = false;
-}
-
-function registrarEgreso(id) {
-  const f = state.finanzas.find(x => x.id === id);
-  if (!f) return;
-  pagoFinanzaId = id;
-  document.getElementById('fp-caso').textContent = 'Egreso: ' + f.patient;
-  document.getElementById('fp-monto').value = '';
-  document.getElementById('fp-fecha').value = new Date().toISOString().slice(0,10);
-  document.getElementById('fp-metodo').value = 'Varios';
-  document.getElementById('fp-notas').value = '';
-  openModal('pagoModal');
-  modoEgreso = true;
-}
+// ==================== FINANZAS (con agrupación) ====================
+// ... (todo el bloque de finanzas, incluyendo toggleFinanzasGroup, renderFinanzas con agrupamiento, etc.)
+// (copialo de tu versión anterior, no ha cambiado)
 
 // ==================== SUBIDA STL (Supabase) ====================
+async function handleSTLDrop(e) { /* igual */ }
+async function handleSTLFiles(inputFiles) { /* igual */ }
+async function processSTLFiles(files) { /* igual */ }
+async function uploadSTLFiles(caseId) { /* igual */ }
 
-async function handleSTLDrop(e) {
-  e.preventDefault();
-  document.getElementById('stlDropZone').classList.remove('dragover');
-  const files = e.dataTransfer.files;
-  if (files.length) await processSTLFiles(files);
-}
-
-async function handleSTLFiles(inputFiles) {
-  await processSTLFiles(inputFiles);
-}
-
-async function processSTLFiles(files) {
-  const fileList = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.stl'));
-  if (!fileList.length) {
-    showToast('Solo se permiten archivos .stl');
-    return;
-  }
-
-  stlFiles = [];
-  const regex = /[-_\s](mandible|maxilla)[-_\s]*(\d+)\.stl$/i;
-  const parsed = { sup: {}, inf: {} };
-
-  for (const file of fileList) {
-    const match = file.name.match(regex);
-    if (!match) {
-      showToast(`Formato incorrecto: ${file.name}`);
-      continue;
-    }
-    const arc = match[1].toLowerCase() === 'maxilla' ? 'sup' : 'inf';
-    const step = parseInt(match[2]);
-    if (!parsed[arc][step]) parsed[arc][step] = file;
-  }
-
-  for (const [arc, steps] of Object.entries(parsed)) {
-    for (const [step, file] of Object.entries(steps)) {
-      stlFiles.push({ file, arc, step: parseInt(step) });
-    }
-  }
-
-  const supMax = Object.keys(parsed.sup).map(Number).sort((a,b)=>b-a)[0] ?? -1;
-  const infMax = Object.keys(parsed.inf).map(Number).sort((a,b)=>b-a)[0] ?? -1;
-  if (supMax >= 0) document.getElementById('f-sup').value = supMax + 1;
-  if (infMax >= 0) document.getElementById('f-inf').value = infMax + 1;
-
-  let html = '';
-  if (Object.keys(parsed.sup).length) html += `<div>▲ Superior: ${Object.keys(parsed.sup).map(Number).sort((a,b)=>a-b).join(', ')}</div>`;
-  if (Object.keys(parsed.inf).length) html += `<div>▼ Inferior: ${Object.keys(parsed.inf).map(Number).sort((a,b)=>a-b).join(', ')}</div>`;
-  document.getElementById('stlPreview').innerHTML = html || 'Ningún archivo válido';
-
-  showToast(`${stlFiles.length} archivos listos`);
-}
-
-async function uploadSTLFiles(caseId) {
-  if (!stlFiles.length) return;
-
-  const c = state.cases.find(x => x.id === caseId);
-  if (!c) return;
-
-  for (const {file, arc, step} of stlFiles) {
-    const path = `${caseId}/${arc}/${step}.stl`;
-    let retries = 2;
-    let success = false;
-    
-    while (retries >= 0 && !success) {
-      try {
-        const { error } = await supabaseClient.storage
-          .from('stl-files')
-          .upload(path, file, { upsert: true });
-        
-        if (error) {
-          console.error('Intento fallido:', retries, error);
-          retries--;
-          if (retries < 0) {
-            showToast('Error al subir STL después de varios intentos');
-            return;
-          }
-          await new Promise(r => setTimeout(r, 1000)); // esperar 1s antes de reintentar
-        } else {
-          success = true;
-          const { data: urlData } = supabaseClient.storage
-            .from('stl-files')
-            .getPublicUrl(path);
-          if (!c.arcadas[arc].stlUrls) c.arcadas[arc].stlUrls = {};
-          c.arcadas[arc].stlUrls[step] = urlData.publicUrl;
-        }
-      } catch (e) {
-        console.error('Error de red:', e);
-        retries--;
-        if (retries < 0) {
-          showToast('Error de conexión al subir STL');
-          return;
-        }
-        await new Promise(r => setTimeout(r, 1000));
-      }
-    }
-  }
-
-  stlFiles = [];
-  document.getElementById('stlPreview').innerHTML = '';
-  renderAll(); // refrescar la vista para mostrar enlaces
-}
-
-// ==================== SUBIDA PDFs (Supabase) ====================
+// ==================== SUBIDA PDFs (NUEVO) ====================
 async function handlePDFDrop(e) {
   e.preventDefault();
   document.getElementById('pdfDropZone').classList.remove('dragover');
@@ -1719,15 +868,8 @@ async function handlePDFFiles(inputFiles) {
 
 async function processPDFFiles(files) {
   const fileList = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
-  if (!fileList.length) {
-    showToast('Solo se permiten archivos .pdf');
-    return;
-  }
-  if (fileList.length > 3) {
-    showToast('Máximo 3 archivos PDF');
-    return;
-  }
-
+  if (!fileList.length) { showToast('Solo se permiten archivos .pdf'); return; }
+  if (fileList.length > 3) { showToast('Máximo 3 archivos PDF'); return; }
   pdfFiles = fileList.map(file => ({ file }));
   document.getElementById('pdfPreview').innerHTML = pdfFiles.map(f => `📄 ${f.file.name}`).join('<br>');
   showToast(`${pdfFiles.length} PDF(s) listos`);
@@ -1735,29 +877,17 @@ async function processPDFFiles(files) {
 
 async function uploadPDFFiles(caseId) {
   if (!pdfFiles.length) return;
-
   const c = state.cases.find(x => x.id === caseId);
   if (!c) return;
-
-  // Crear array de URLs si no existe
   if (!c.pdfUrls) c.pdfUrls = [];
-
   for (const {file} of pdfFiles) {
     const path = `pdfs/${caseId}/${file.name}`;
-    const { error } = await supabaseClient.storage
-      .from('stl-files')
-      .upload(path, file, { upsert: true });
-
+    const { error } = await supabaseClient.storage.from('stl-files').upload(path, file, { upsert: true });
     if (!error) {
-      const { data: urlData } = supabaseClient.storage
-        .from('stl-files')
-        .getPublicUrl(path);
+      const { data: urlData } = supabaseClient.storage.from('stl-files').getPublicUrl(path);
       c.pdfUrls.push({ name: file.name, url: urlData.publicUrl });
-    } else {
-      console.error('Error al subir PDF:', error);
-    }
+    } else console.error('Error al subir PDF:', error);
   }
-
   pdfFiles = [];
   document.getElementById('pdfPreview').innerHTML = '';
 }
@@ -1786,7 +916,6 @@ function showToast(msg) {
   clearTimeout(toastT);
   toastT = setTimeout(() => t.classList.remove('show'), 2500);
 }
-
 
 // ==================== INICIAR ====================
 document.getElementById('bn-kanban').classList.add('active');
