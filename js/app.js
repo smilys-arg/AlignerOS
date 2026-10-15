@@ -22,13 +22,31 @@
 
 // ==================== NOTIFICACIONES PUSH ====================
 async function requestNotificationPermission() {
-  if ('Notification' in window) {
-    const permission = await Notification.requestPermission();
-    if (permission === 'granted') console.log('Notificaciones permitidas');
-  }
+  if (!('Notification' in window)) { showToast('Este navegador no admite avisos'); return; }
+  const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+  updateNotificationButton();
+  if (permission === 'granted') { showToast('Avisos de entrega activados'); checkUrgentNotifications(); }
+  else if (permission === 'denied') showToast('Los avisos están bloqueados en el navegador');
 }
-setTimeout(requestNotificationPermission, 3000);
 
+function updateNotificationButton() {
+  const button = document.getElementById('notificationBtn');
+  if (!button) return;
+  const enabled = 'Notification' in window && Notification.permission === 'granted';
+  button.classList.toggle('enabled', enabled);
+  button.textContent = '🔔';
+  button.title = enabled ? 'Avisos de entrega activados' : 'Activar avisos de entrega';
+  button.setAttribute('aria-label', button.title);
+}
+updateNotificationButton();
+
+let previouslyNotified = [];
+try { previouslyNotified = JSON.parse(sessionStorage.getItem('aligner_urgent_notifications') || '[]'); } catch(e) {}
+const urgentNotificationSent = new Set(Array.isArray(previouslyNotified) ? previouslyNotified : []);
+function rememberUrgentNotification(key) {
+  urgentNotificationSent.add(key);
+  try { sessionStorage.setItem('aligner_urgent_notifications', JSON.stringify([...urgentNotificationSent])); } catch(e) {}
+}
 function checkUrgentNotifications() {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const now = new Date(); now.setHours(0,0,0,0);
@@ -37,9 +55,11 @@ function checkUrgentNotifications() {
     if (prio === 'urgente' && !isCaseCompletelyFinished(c)) {
       const d = daysUntil(c.delivery);
       if (d <= 0) {
-        new Notification(`⚠ VENCIDO: ${c.patient}`, {body: `Fecha de entrega pasada`, icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Ccircle cx="50" cy="50" r="45" fill="%23dc2626"/%3E%3C/svg%3E'});
+        const key = `${c.id}:${c.delivery}:vencido`;
+        if (!urgentNotificationSent.has(key)) { new Notification(`⚠ VENCIDO: ${c.patient}`, {body: `Fecha de entrega pasada`, icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Ccircle cx="50" cy="50" r="45" fill="%23dc2626"/%3E%3C/svg%3E'}); rememberUrgentNotification(key); }
       } else if (d === 1) {
-        new Notification(`🔴 MAÑANA: ${c.patient}`, {body: `Queda 1 día para la entrega`, icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Ccircle cx="50" cy="50" r="45" fill="%23f97316"/%3E%3C/svg%3E'});
+        const key = `${c.id}:${c.delivery}:mañana`;
+        if (!urgentNotificationSent.has(key)) { new Notification(`🔴 MAÑANA: ${c.patient}`, {body: `Queda 1 día para la entrega`, icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Ccircle cx="50" cy="50" r="45" fill="%23f97316"/%3E%3C/svg%3E'}); rememberUrgentNotification(key); }
       }
     }
   });
@@ -308,6 +328,7 @@ function renderAll() {
   renderKanban();
   renderCases();
   renderStock();
+  if (document.getElementById('view-tareas')?.style.display !== 'none') renderDailyTasks();
   saveState();
   renderFinanzas();
 }
@@ -353,13 +374,16 @@ function renderStats() {
   const prox = state.cases.filter(c => getPrio(c.delivery)==='proximo' && !isCaseCompletelyFinished(c)).length;
   const cnt = countByStage();
   document.getElementById('statsGrid').innerHTML = `
-    <div class="stat-card"><div class="stat-label">Urgentes</div><div class="stat-value ${urg>0?'urgent':''}">${urg}</div></div>
-    <div class="stat-card"><div class="stat-label">Próximos</div><div class="stat-value ${prox>0?'warning':''}">${prox}</div></div>
-    <div class="stat-card"><div class="stat-label">Casos</div><div class="stat-value">${state.cases.length}</div></div>
-    <div class="stat-card"><div class="stat-label">Imprimir</div><div class="stat-value" style="color:var(--sp)">${cnt[0]}</div></div>
-    <div class="stat-card"><div class="stat-label">Termo.</div><div class="stat-value" style="color:var(--st)">${cnt[1]}</div></div>
-    <div class="stat-card"><div class="stat-label">Corte/Pul</div><div class="stat-value" style="color:var(--sc)">${cnt[2]}</div></div>
-    <div class="stat-card"><div class="stat-label">Listo</div><div class="stat-value" style="color:var(--senv)">${cnt[3]}</div></div>`;
+    <div class="stat-card priority-card"><span class="stat-symbol">!</span><div class="stat-label">Requieren atención</div><div class="stat-value ${urg>0?'urgent':''}">${urg}</div><div class="stat-foot">Vencen en 48 h o ya vencidos</div></div>
+    <div class="stat-card"><span class="stat-symbol">◷</span><div class="stat-label">Próximas entregas</div><div class="stat-value ${prox>0?'warning':''}">${prox}</div><div class="stat-foot">Dentro de los próximos 5 días</div></div>
+    <div class="stat-card"><span class="stat-symbol">◫</span><div class="stat-label">Casos activos</div><div class="stat-value">${state.cases.length}</div><div class="stat-foot">Trabajos en el laboratorio</div></div>
+    <div class="stat-card stage-stat"><span class="stat-symbol">01</span><div class="stat-label">Para imprimir</div><div class="stat-value" style="color:var(--sp)">${cnt[0]}</div><div class="stat-foot">Alineadores pendientes</div></div>
+    <div class="stat-card stage-stat"><span class="stat-symbol">02</span><div class="stat-label">Termoformado</div><div class="stat-value" style="color:var(--st)">${cnt[1]}</div><div class="stat-foot">Alineadores pendientes</div></div>
+    <div class="stat-card stage-stat"><span class="stat-symbol">03</span><div class="stat-label">Corte y pulido</div><div class="stat-value" style="color:var(--sc)">${cnt[2]}</div><div class="stat-foot">Alineadores pendientes</div></div>
+    <div class="stat-card stage-stat"><span class="stat-symbol">04</span><div class="stat-label">Listos</div><div class="stat-value" style="color:var(--senv)">${cnt[3]}</div><div class="stat-foot">Para entrega o cierre</div></div>`;
+  const todayLabel = new Intl.DateTimeFormat('es-AR', { weekday:'long', day:'numeric', month:'long' }).format(new Date());
+  const dateEl = document.getElementById('productionDate');
+  if (dateEl) dateEl.textContent = `PANEL DEL TALLER · ${todayLabel.toLocaleUpperCase('es-AR')}`;
 }
 
 function renderAlerts() {
@@ -375,14 +399,14 @@ function renderAlerts() {
     }
   });
   state.stock.forEach(s => { if(s.qty<=s.min) a.push({t:'yellow', m:`⬡ ${s.name} (${s.qty} ${s.unit})`}); });
-  if(!a.length) a.push({t:'green', m:'✓ Sin alertas'});
+  if(!a.length) a.push({t:'green', m:'Todo en orden. No hay entregas urgentes ni materiales por reponer.'});
   document.getElementById('alertsBar').innerHTML = a.map(x => `<div class="alert-pill ${x.t}"><div class="alert-dot"></div>${x.m}</div>`).join('');
 }
 
 // ==================== KANBAN ====================
 function renderKanban() {
   const f = state.kFilter;
-  const patientFilter = state.patientFilter.toLowerCase();
+  const searchTerm = state.patientFilter.trim().toLocaleLowerCase();
   const doctorKanbanFilter = state.doctorKanbanFilter;
   document.getElementById('kanban').innerHTML = SKEYS.map((key, stageIdx) => {
     const color = Object.values(SCOLS)[stageIdx];
@@ -393,7 +417,8 @@ function renderKanban() {
       arc.alinStates.forEach((st,i) => { if(st===stageIdx) indices.push(i); });
       if(!indices.length) return;
       if (doctorKanbanFilter && !(c.doctorId || '').toLowerCase().includes(doctorKanbanFilter)) return;
-      if (patientFilter && !c.patient.toLowerCase().includes(patientFilter)) return;
+      const searchableText = `${c.patient} ${c.doctor || ''} ${c.doctorId || ''} ${c.id || ''}`.toLocaleLowerCase();
+      if (searchTerm && !searchableText.includes(searchTerm)) return;
       const p = getPrio(c.delivery);
       if(f==='urgente' && p!=='urgente') return;
       if(f==='proximo' && p!=='proximo') return;
@@ -401,13 +426,20 @@ function renderKanban() {
       if(f==='inf' && at!=='inf') return;
       cards.push({c,at,p,indices,arc});
     }));
-    cards.sort((a,b)=> ( {urgente:0,proximo:1,ok:2}[a.p] - {urgente:0,proximo:1,ok:2}[b.p] ));
+    cards.sort((a,b)=> {
+      const priorityOrder = {urgente:0,proximo:1,ok:2};
+      const priorityDifference = priorityOrder[a.p] - priorityOrder[b.p];
+      if (priorityDifference) return priorityDifference;
+      const deadlineDifference = daysUntil(a.c.delivery) - daysUntil(b.c.delivery);
+      if (Number.isFinite(deadlineDifference) && deadlineDifference) return deadlineDifference;
+      return a.c.patient.localeCompare(b.c.patient, 'es');
+    });
     const body = cards.length ? cards.map(it => {
       const d = daysUntil(it.c.delivery);
-      const rangeStr = formatRanges(it.indices);
       const cardId = `${it.c.id}-${it.at}-${stageIdx}`;
+      const nextStage = stageIdx < 3 ? STAGES[stageIdx + 1] : 'Finalizado';
       return `<div class="arc-card ${it.p}">
-        <div class="arc-top"><div style="min-width:0;flex:1"><div class="arc-patient">${it.c.patient.split(',')[0]}</div><div class="arc-doctor">${it.c.doctorId||it.c.doctor}</div></div><span class="arc-type ${it.at}">${it.at.toUpperCase()}</span></div>
+        <div class="arc-top"><div style="min-width:0;flex:1"><div class="arc-patient">${it.c.patient.split(',')[0]}</div><div class="arc-doctor">${it.c.doctorId||it.c.doctor}</div></div><span class="arc-type ${it.at}">${it.at==='sup'?'SUPERIOR':'INFERIOR'}</span></div>
         <div class="alin-range">
           ${it.indices.map(i => {
             const url = it.c.arcadas[it.at]?.stlUrls?.[i];
@@ -415,10 +447,10 @@ function renderKanban() {
             return i;
           }).join(' ')} (${it.indices.length} uds)
         </div>
-        <div class="arc-bottom"><span class="delivery-chip ${it.p}">📅 ${d<=0?'VENCIDO':d+'d'}</span>
+        <div class="arc-bottom"><span class="delivery-chip ${it.p}"><span>ENTREGA</span> ${d<0?`${Math.abs(d)}d tarde`:d===0?'HOY':d===1?'MAÑANA':`${d} días`}</span>
         <div class="quick-btns">
          <button class="qbtn" onmousedown="event.preventDefault(); toggleKanbanSelector('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Seleccionar</button>
-          <button class="qbtn done-btn" onclick="event.stopPropagation(); completeStage('${it.c.id}','${it.at}',${stageIdx})">✓</button>
+          <button class="qbtn done-btn" aria-label="Avanzar ${it.indices.length} alineadores a ${nextStage}" onclick="event.stopPropagation(); completeStage('${it.c.id}','${it.at}',${stageIdx})">Avanzar ${it.indices.length} →</button>
         </div></div>
         <div class="kanban-alin-selector" id="ksel-${cardId}" data-open-time="0">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px">
@@ -439,7 +471,8 @@ function renderKanban() {
         </div>
       </div>`;
     }).join('') : `<div class="empty-col"><div class="empty-icon">◌</div>Sin pendientes</div>`;
-    return `<div class="kanban-col"><div class="col-header"><div class="col-title"><div class="col-dot" style="background:${color}"></div>${STAGES[stageIdx]}</div><span class="col-count">${cards.length}</span></div><div class="col-body">${body}</div></div>`;
+    const totalInStage = cards.reduce((sum, card) => sum + card.indices.length, 0);
+    return `<section class="kanban-col" id="stage-${stageIdx}"><div class="col-header"><div class="col-heading"><div class="col-title"><div class="col-dot" style="background:${color}"></div>${STAGES[stageIdx]}</div><span class="col-subtitle">${cards.length} trabajos · ${totalInStage} alineadores</span></div><span class="col-count">${cards.length}</span></div><div class="col-body">${body}</div></section>`;
   }).join('');
 }
 
@@ -566,16 +599,24 @@ function completeStage(caseId, arcType, stageIdx) {
 // ==================== CASOS ====================
 function renderCases() {
   const f = state.cFilter;
-  let list = state.cases;
+  let list = [...state.cases];
   if (f !== 'all') list = list.filter(c => getPrio(c.delivery) === f);
   if (state.doctorFilter) {
     const df = state.doctorFilter.toLowerCase();
-    list = list.filter(c => c.doctorId.toLowerCase().startsWith(df));
+    list = list.filter(c => `${c.patient || ''} ${c.doctor || ''} ${c.doctorId || ''} ${c.id || ''}`.toLocaleLowerCase().includes(df));
   }
+  list.sort((a, b) => {
+    const da = daysUntil(a.delivery), db = daysUntil(b.delivery);
+    if (!Number.isFinite(da)) return 1;
+    if (!Number.isFinite(db)) return -1;
+    return da - db || (a.patient || '').localeCompare(b.patient || '', 'es');
+  });
+  const count = document.getElementById('casesResultCount');
+  if (count) count.textContent = state.doctorFilter || f !== 'all' ? `Mostrando ${list.length} de ${state.cases.length} casos` : `${list.length} casos · primero los que se entregan antes`;
   const bmap = {urgente:'<span class="case-badge urgente">⚠ URGENTE</span>',proximo:'<span class="case-badge proximo">● PRÓXIMO</span>',ok:'<span class="case-badge ok">✓ OK</span>'};
   const dcol = {urgente:'var(--red)',proximo:'var(--yellow)',ok:'var(--green)'};
   const clsMap = ['print','thermo','cutpolish','listo'];
-  document.getElementById('casesList').innerHTML = list.map(c => {
+  document.getElementById('casesList').innerHTML = list.length ? list.map(c => {
     const p = getPrio(c.delivery); const d = daysUntil(c.delivery);
     const arcHtml = ['sup','inf'].map(at => {
       const arc = c.arcadas[at];
@@ -635,7 +676,7 @@ function renderCases() {
       </div>
       ${c.open ? `<div class="case-body"><div class="arcadas-grid">${arcHtml}</div>${(c.obs || (c.pdfUrls && c.pdfUrls.length)) ? `<div class="obs-note">${c.obs ? `📝 ${c.obs}` : ''}${(c.pdfUrls && c.pdfUrls.length) ? c.pdfUrls.map(p => `<div><a href="${p.url}" target="_blank" title="Descargar PDF">📎 ${p.name}</a></div>`).join('') : ''}</div>` : ''}</div>` : ''}
     </div>`;
-  }).join('');
+  }).join('') : `<div class="empty-state"><span class="empty-state-icon">⌕</span><strong>No encontramos casos</strong><span>Probá con el nombre del paciente, el doctor o su código.</span></div>`;
 }
 
 function filterByDoctor() { state.doctorFilter = document.getElementById('doctorFilterInput').value; renderCases(); }
@@ -826,13 +867,20 @@ function editStock(id) {
 function submitStock() {
   const name = document.getElementById('sm-name').value.trim();
   if (!name) { alert('Nombre requerido'); return; }
-  pushUndo();
   const type = document.getElementById('sm-type').value;
   const unit = document.getElementById('sm-unit').value.trim() || 'unid';
-  const qty = parseInt(document.getElementById('sm-qty').value) || 0;
-  const min = parseInt(document.getElementById('sm-min').value) || 10;
-  if (editingStockId) {
-    const s = state.stock.find(x=>x.id===editingStockId);
+  const qtyValue = document.getElementById('sm-qty').value;
+  const minValue = document.getElementById('sm-min').value;
+  const qty = qtyValue === '' ? 0 : Number(qtyValue);
+  const min = minValue === '' ? 10 : Number(minValue);
+  if (!Number.isInteger(qty) || qty < 0 || !Number.isInteger(min) || min < 0) {
+    alert('El stock y el mínimo deben ser números enteros iguales o mayores que cero.');
+    return;
+  }
+  const stockId = editingStockId;
+  pushUndo();
+  if (stockId) {
+    const s = state.stock.find(x=>x.id===stockId);
     if (s) { s.name = name; s.type = type; s.unit = unit; s.qty = qty; s.min = min; }
     editingStockId = null;
     addActivity(`✎ Material editado: ${name}`);
@@ -842,17 +890,22 @@ function submitStock() {
   }
   closeModal('stockModal');
   renderAll();
-  showToast(editingStockId ? 'Material actualizado ✓' : 'Material agregado ✓');
+  showToast(stockId ? 'Material actualizado ✓' : 'Material agregado ✓');
 }
 function adjStock(id, delta) {
-  pushUndo();
   const s = state.stock.find(x=>x.id===id);
-  if(s) { s.qty = Math.max(0, s.qty+delta); addActivity(`🔢 Stock: ${s.name} ${delta>=0?'+'+delta:delta}`); renderAll(); }
+  if (!s) return;
+  const nextQty = s.qty + delta;
+  if (nextQty < 0) return showToast(`Stock insuficiente: hay ${s.qty} ${s.unit}`);
+  pushUndo();
+  s.qty = nextQty;
+  addActivity(`🔢 Stock: ${s.name} ${delta>=0?'+'+delta:delta}`);
+  renderAll();
 }
 function deleteStock(id) {
-  if(confirm('Eliminar?')) {
+  const s = state.stock.find(x=>x.id===id);
+  if(s && confirm(`¿Eliminar ${s.name} del inventario? Esta acción se puede deshacer.`)) {
     pushUndo();
-    const s = state.stock.find(x=>x.id===id);
     state.stock = state.stock.filter(s=>s.id!==id);
     addActivity(`🗑 Material eliminado: ${s? s.name : id}`);
     renderAll();
@@ -867,17 +920,15 @@ function openReponer(id) {
 }
 function addRepQty(n) { const i=document.getElementById('rm-inp'); i.value = (parseInt(i.value)||0) + n; }
 function confirmReponer() {
-  const n = parseInt(document.getElementById('rm-inp').value);
-  if(!n || n<=0) { alert('Ingresá cantidad'); return; }
-  pushUndo();
+  const n = Number(document.getElementById('rm-inp').value);
+  if(!Number.isInteger(n) || n<=0) { alert('Ingresá una cantidad entera mayor que cero'); return; }
   const s = state.stock.find(x=>x.id===repCtx);
-  if(s) { s.qty += n; addActivity(`📦 Reponer: ${s.name} +${n} ${s.unit}`); closeModal('reponerModal'); renderAll(); showToast(`+${n} ${s.unit}`); }
+  if(s) { pushUndo(); s.qty += n; addActivity(`📦 Reponer: ${s.name} +${n} ${s.unit}`); closeModal('reponerModal'); renderAll(); showToast(`+${n} ${s.unit}`); }
 }
 
 // ==================== TAREAS DIARIAS ====================
 function renderDailyTasks() {
   const tasks = {};
-  const prioOrder = { urgente: 0, proximo: 1, ok: 2 };
   state.cases.forEach(c => {
     ['sup','inf'].forEach(at => {
       const arc = c.arcadas[at];
@@ -895,8 +946,9 @@ function renderDailyTasks() {
         const stageIdx = parseInt(st);
         if (!tasks[stageIdx]) tasks[stageIdx] = [];
         tasks[stageIdx].push({
-          patient: c.patient, doctorId: c.doctorId, arcType: at,
-          numbers: nums, prio: getPrio(c.delivery), delivery: c.delivery
+          caseId: c.id, patient: c.patient, doctorId: c.doctorId, arcType: at,
+          numbers: nums, prio: getPrio(c.delivery), delivery: c.delivery,
+          days: daysUntil(c.delivery)
         });
       }
     });
@@ -906,7 +958,7 @@ function renderDailyTasks() {
   const stageColors = ['#2563eb','#7c3aed','#ea580c','#16a34a'];
   for (let si = 0; si < SKEYS.length; si++) {
     const list = tasks[si] || [];
-    list.sort((a, b) => si === 3 ? a.numbers.length - b.numbers.length : 0);
+    list.sort((a, b) => a.days - b.days || a.patient.localeCompare(b.patient, 'es'));
     const totalAlin = list.reduce((sum, t) => sum + t.numbers.length, 0);
     html += `<div class="task-stage-group">
       <div class="task-stage-header" style="border-left:4px solid ${stageColors[si]}">
@@ -919,17 +971,55 @@ function renderDailyTasks() {
         const rangeStr = formatRanges(t.numbers);
         const badgeClass = t.prio === 'urgente' ? 'urgent' : (t.prio === 'proximo' ? 'warning' : '');
         const arcLabel = t.arcType === 'sup' ? '▲' : '▼';
+        const nextStage = si < 3 ? STAGES[si + 1] : 'Finalizado';
+        const dueLabel = t.days < 0 ? `Vencido ${Math.abs(t.days)}d` : t.days === 0 ? 'Entrega hoy' : `Entrega en ${t.days}d`;
         html += `<div class="task-item">
-          <span class="task-patient">${arcLabel} ${t.patient.split(',')[0]}</span>
+          <button class="task-patient task-open-btn" onclick="openTaskCase('${t.caseId}')">${arcLabel} ${t.patient.split(',')[0]}</button>
           <span class="task-range">${rangeStr}</span>
           <span class="task-count">${t.numbers.length} uds</span>
           ${badgeClass ? `<span class="task-badge ${badgeClass}">${t.prio.toUpperCase()}</span>` : ''}
+          <span class="task-due ${t.days <= 2 ? 'urgent' : ''}">${dueLabel}</span>
+          <button class="task-advance-btn" onclick="advanceTaskGroup('${t.caseId}','${t.arcType}',${si})">Avanzar ${t.numbers.length} → ${nextStage}</button>
         </div>`;
       });
     }
     html += '</div>';
   }
   document.getElementById('dailyTasks').innerHTML = html;
+}
+
+function openTaskCase(caseId) {
+  const c = state.cases.find(x => x.id === caseId);
+  if (!c) return showToast('El caso ya no está disponible');
+  state.cFilter = 'all';
+  state.doctorFilter = '';
+  const search = document.getElementById('patientFilterInput');
+  if (search) search.value = '';
+  switchView('casos', document.getElementById('bn-casos'));
+  if (!c.open) c.open = true;
+  renderCases();
+  requestAnimationFrame(() => document.getElementById(`case-${caseId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+}
+
+function advanceTaskGroup(caseId, arcType, stageIdx) {
+  const c = state.cases.find(x => x.id === caseId);
+  const arc = c?.arcadas?.[arcType];
+  if (!c || !arc || stageIdx < 0 || stageIdx >= FINAL_STAGE) return showToast('La tarea ya no está disponible');
+  const nextStage = stageIdx + 1;
+  const indices = [];
+  arc.alinStates.forEach((stage, index) => { if (stage === stageIdx) indices.push(index); });
+  if (!indices.length) return showToast('La tarea ya fue actualizada');
+  const destination = nextStage === FINAL_STAGE ? 'Finalizado' : STAGES[nextStage];
+  if (!confirm(`¿Avanzar ${indices.length} alineadores de ${c.patient} a ${destination}?`)) return;
+  pushUndo();
+  indices.forEach(index => {
+    arc.alinStates[index] = nextStage;
+    adjustStockOnStageChange(arc, index, stageIdx, nextStage);
+  });
+  addActivity(`✓ ${c.patient}: ${indices.length} alineadores → ${destination}`);
+  renderAll();
+  renderDailyTasks();
+  showToast(`${indices.length} alineadores → ${destination}`);
 }
 
 // ==================== COMANDOS POR VOZ ====================
@@ -1556,6 +1646,19 @@ function switchView(v, el) {
   document.querySelectorAll('.desktop-nav .tab, .bnav-item').forEach(b => b.classList.remove('active'));
   if(el) el.classList.add('active');
   ['kanban','casos','stock','tareas','finanzas'].forEach(x => document.getElementById('view-'+x).style.display = x===v ? '' : 'none');
+  const labels = {kanban:'Producción',casos:'Casos',stock:'Materiales',tareas:'Trabajo diario',finanzas:'Finanzas'};
+  const actions = {stock:{label:'＋ Agregar material',run:openStockModal},finanzas:{label:'＋ Nuevo registro',run:openFinanzaModal}};
+  const topbarLabel = document.getElementById('topbarLabel');
+  if (topbarLabel) topbarLabel.textContent = labels[v] || 'AlignerOS';
+  const newButton = document.querySelector('.topbar .btn-new');
+  if (newButton) newButton.innerHTML = actions[v] ? actions[v].label : '<span>＋</span> Nuevo caso';
+  if (newButton) newButton.onclick = actions[v] ? actions[v].run : openNewCase;
+  const fab = document.querySelector('.fab');
+  if (fab) {
+    fab.textContent = '＋';
+    fab.setAttribute('aria-label', actions[v] ? actions[v].label.replace('＋ ', '') : 'Nuevo caso');
+    fab.onclick = actions[v] ? actions[v].run : openNewCase;
+  }
   if (v === 'tareas') renderDailyTasks();
   if (v === 'finanzas') renderFinanzas();
 }
@@ -1581,4 +1684,3 @@ document.getElementById('bn-kanban').classList.add('active');
 loadState();
 renderAll();
 setupFirebaseListener();
-requestNotificationPermission();
