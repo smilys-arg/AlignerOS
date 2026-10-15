@@ -177,8 +177,8 @@
       <div class="form-group full"><label class="form-label">Nombre</label><input class="form-input" id="sm-name"></div>
       <div class="form-group"><label class="form-label">Tipo</label><select class="form-input" id="sm-type"><option>Planchas</option><option>Resina</option><option>Packaging</option></select></div>
       <div class="form-group"><label class="form-label">Unidad</label><input class="form-input" id="sm-unit" placeholder="láminas"></div>
-      <div class="form-group"><label class="form-label">Stock</label><input class="form-input" id="sm-qty" type="number"></div>
-      <div class="form-group"><label class="form-label">Mínimo</label><input class="form-input" id="sm-min" type="number"></div>
+      <div class="form-group"><label class="form-label">Stock</label><input class="form-input" id="sm-qty" type="number" min="0" step="1" inputmode="numeric"></div>
+      <div class="form-group"><label class="form-label">Mínimo</label><input class="form-input" id="sm-min" type="number" min="0" step="1" inputmode="numeric"></div>
     </div>
     <div class="form-actions"><button class="btn-cancel" onclick="closeModal('stockModal')">Cancelar</button><button class="btn-submit" id="stockSubmitBtn" onclick="submitStock()">Guardar</button></div>
   </div>
@@ -210,7 +210,7 @@
       <button class="qbtn" onclick="addRepQty(10)">+10</button><button class="qbtn" onclick="addRepQty(25)">+25</button>
       <button class="qbtn" onclick="addRepQty(50)">+50</button><button class="qbtn" onclick="addRepQty(100)">+100</button>
     </div>
-    <input class="form-input" id="rm-inp" type="number" placeholder="Cantidad" style="text-align:center;font-size:18px;padding:12px">
+    <input class="form-input" id="rm-inp" type="number" min="1" step="1" inputmode="numeric" placeholder="Cantidad" style="text-align:center;font-size:18px;padding:12px">
     <div class="form-actions" style="margin-top:14px"><button class="btn-cancel" onclick="closeModal('reponerModal')">Cancelar</button><button class="btn-submit" onclick="confirmReponer()">Confirmar</button></div>
   </div>
 </div>
