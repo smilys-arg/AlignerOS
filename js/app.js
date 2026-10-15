@@ -22,13 +22,25 @@
 
 // ==================== NOTIFICACIONES PUSH ====================
 async function requestNotificationPermission() {
-  if ('Notification' in window) {
-    const permission = await Notification.requestPermission();
-    if (permission === 'granted') console.log('Notificaciones permitidas');
-  }
+  if (!('Notification' in window)) { showToast('Este navegador no admite avisos'); return; }
+  const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
+  updateNotificationButton();
+  if (permission === 'granted') { showToast('Avisos de entrega activados'); checkUrgentNotifications(); }
+  else if (permission === 'denied') showToast('Los avisos están bloqueados en el navegador');
 }
-setTimeout(requestNotificationPermission, 3000);
 
+function updateNotificationButton() {
+  const button = document.getElementById('notificationBtn');
+  if (!button) return;
+  const enabled = 'Notification' in window && Notification.permission === 'granted';
+  button.classList.toggle('enabled', enabled);
+  button.textContent = '🔔';
+  button.title = enabled ? 'Avisos de entrega activados' : 'Activar avisos de entrega';
+  button.setAttribute('aria-label', button.title);
+}
+updateNotificationButton();
+
+const urgentNotificationSent = new Set();
 function checkUrgentNotifications() {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const now = new Date(); now.setHours(0,0,0,0);
@@ -37,9 +49,11 @@ function checkUrgentNotifications() {
     if (prio === 'urgente' && !isCaseCompletelyFinished(c)) {
       const d = daysUntil(c.delivery);
       if (d <= 0) {
-        new Notification(`⚠ VENCIDO: ${c.patient}`, {body: `Fecha de entrega pasada`, icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Ccircle cx="50" cy="50" r="45" fill="%23dc2626"/%3E%3C/svg%3E'});
+        const key = `${c.id}:${c.delivery}:vencido`;
+        if (!urgentNotificationSent.has(key)) { new Notification(`⚠ VENCIDO: ${c.patient}`, {body: `Fecha de entrega pasada`, icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Ccircle cx="50" cy="50" r="45" fill="%23dc2626"/%3E%3C/svg%3E'}); urgentNotificationSent.add(key); }
       } else if (d === 1) {
-        new Notification(`🔴 MAÑANA: ${c.patient}`, {body: `Queda 1 día para la entrega`, icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Ccircle cx="50" cy="50" r="45" fill="%23f97316"/%3E%3C/svg%3E'});
+        const key = `${c.id}:${c.delivery}:mañana`;
+        if (!urgentNotificationSent.has(key)) { new Notification(`🔴 MAÑANA: ${c.patient}`, {body: `Queda 1 día para la entrega`, icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Ccircle cx="50" cy="50" r="45" fill="%23f97316"/%3E%3C/svg%3E'}); urgentNotificationSent.add(key); }
       }
     }
   });
@@ -396,7 +410,7 @@ function renderKanban() {
       arc.alinStates.forEach((st,i) => { if(st===stageIdx) indices.push(i); });
       if(!indices.length) return;
       if (doctorKanbanFilter && !(c.doctorId || '').toLowerCase().includes(doctorKanbanFilter)) return;
-      const searchableText = `${c.patient} ${c.doctor || ''} ${c.doctorId || ''}`.toLocaleLowerCase();
+      const searchableText = `${c.patient} ${c.doctor || ''} ${c.doctorId || ''} ${c.id || ''}`.toLocaleLowerCase();
       if (searchTerm && !searchableText.includes(searchTerm)) return;
       const p = getPrio(c.delivery);
       if(f==='urgente' && p!=='urgente') return;
@@ -578,16 +592,24 @@ function completeStage(caseId, arcType, stageIdx) {
 // ==================== CASOS ====================
 function renderCases() {
   const f = state.cFilter;
-  let list = state.cases;
+  let list = [...state.cases];
   if (f !== 'all') list = list.filter(c => getPrio(c.delivery) === f);
   if (state.doctorFilter) {
     const df = state.doctorFilter.toLowerCase();
-    list = list.filter(c => c.doctorId.toLowerCase().startsWith(df));
+    list = list.filter(c => `${c.patient || ''} ${c.doctor || ''} ${c.doctorId || ''} ${c.id || ''}`.toLocaleLowerCase().includes(df));
   }
+  list.sort((a, b) => {
+    const da = daysUntil(a.delivery), db = daysUntil(b.delivery);
+    if (!Number.isFinite(da)) return 1;
+    if (!Number.isFinite(db)) return -1;
+    return da - db || (a.patient || '').localeCompare(b.patient || '', 'es');
+  });
+  const count = document.getElementById('casesResultCount');
+  if (count) count.textContent = state.doctorFilter || f !== 'all' ? `Mostrando ${list.length} de ${state.cases.length} casos` : `${list.length} casos · primero los que se entregan antes`;
   const bmap = {urgente:'<span class="case-badge urgente">⚠ URGENTE</span>',proximo:'<span class="case-badge proximo">● PRÓXIMO</span>',ok:'<span class="case-badge ok">✓ OK</span>'};
   const dcol = {urgente:'var(--red)',proximo:'var(--yellow)',ok:'var(--green)'};
   const clsMap = ['print','thermo','cutpolish','listo'];
-  document.getElementById('casesList').innerHTML = list.map(c => {
+  document.getElementById('casesList').innerHTML = list.length ? list.map(c => {
     const p = getPrio(c.delivery); const d = daysUntil(c.delivery);
     const arcHtml = ['sup','inf'].map(at => {
       const arc = c.arcadas[at];
@@ -647,7 +669,7 @@ function renderCases() {
       </div>
       ${c.open ? `<div class="case-body"><div class="arcadas-grid">${arcHtml}</div>${(c.obs || (c.pdfUrls && c.pdfUrls.length)) ? `<div class="obs-note">${c.obs ? `📝 ${c.obs}` : ''}${(c.pdfUrls && c.pdfUrls.length) ? c.pdfUrls.map(p => `<div><a href="${p.url}" target="_blank" title="Descargar PDF">📎 ${p.name}</a></div>`).join('') : ''}</div>` : ''}</div>` : ''}
     </div>`;
-  }).join('');
+  }).join('') : `<div class="empty-state"><span class="empty-state-icon">⌕</span><strong>No encontramos casos</strong><span>Probá con el nombre del paciente, el doctor o su código.</span></div>`;
 }
 
 function filterByDoctor() { state.doctorFilter = document.getElementById('doctorFilterInput').value; renderCases(); }
@@ -1569,11 +1591,18 @@ function switchView(v, el) {
   if(el) el.classList.add('active');
   ['kanban','casos','stock','tareas','finanzas'].forEach(x => document.getElementById('view-'+x).style.display = x===v ? '' : 'none');
   const labels = {kanban:'Producción',casos:'Casos',stock:'Materiales',tareas:'Trabajo diario',finanzas:'Finanzas'};
+  const actions = {stock:{label:'＋ Agregar material',run:openStockModal},finanzas:{label:'＋ Nuevo registro',run:openFinanzaModal}};
   const topbarLabel = document.getElementById('topbarLabel');
   if (topbarLabel) topbarLabel.textContent = labels[v] || 'AlignerOS';
   const newButton = document.querySelector('.topbar .btn-new');
-  if (newButton) newButton.innerHTML = v === 'stock' ? '<span>＋</span> Agregar material' : '<span>＋</span> Nuevo caso';
-  if (newButton) newButton.onclick = v === 'stock' ? openStockModal : openNewCase;
+  if (newButton) newButton.innerHTML = actions[v] ? actions[v].label : '<span>＋</span> Nuevo caso';
+  if (newButton) newButton.onclick = actions[v] ? actions[v].run : openNewCase;
+  const fab = document.querySelector('.fab');
+  if (fab) {
+    fab.textContent = '＋';
+    fab.setAttribute('aria-label', actions[v] ? actions[v].label.replace('＋ ', '') : 'Nuevo caso');
+    fab.onclick = actions[v] ? actions[v].run : openNewCase;
+  }
   if (v === 'tareas') renderDailyTasks();
   if (v === 'finanzas') renderFinanzas();
 }

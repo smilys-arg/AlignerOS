@@ -32,6 +32,7 @@
       <div class="topbar-context"><button class="btn-undo" id="btnUndo" disabled onclick="undo()" title="Deshacer (Ctrl+Z)">↶ <span>Deshacer</span></button><span class="topbar-divider"></span><span class="topbar-label" id="topbarLabel">Producción</span></div>
       <div class="header-right">
         <div class="sync-indicator" id="syncIndicator" onclick="syncFromFirebase()" title="Tocar para sincronizar"><span class="sync-dot offline" id="syncDot"></span><span id="syncText">Offline</span></div>
+        <button class="notification-btn" id="notificationBtn" onclick="requestNotificationPermission()" title="Activar avisos de entrega" aria-label="Activar avisos de entrega">🔔</button>
         <button class="activity-btn" onclick="openActivityModal()" title="Registro de actividad" aria-label="Registro de actividad">◷<span class="activity-badge" id="activityBadge" style="display:none">0</span></button>
         <button class="btn-mic" id="btnMic" onclick="startVoiceCommand()" title="Comando de voz">🎙️</button>
         <button class="btn-new" onclick="openNewCase()"><span>＋</span> Nuevo caso</button>
@@ -56,7 +57,7 @@
       <button class="filter-btn" onclick="setFilter('proximo',this)">Próximos</button>
       <button class="filter-btn" onclick="setFilter('sup',this)">Superior</button>
       <button class="filter-btn" onclick="setFilter('inf',this)">Inferior</button>
-      <input class="filter-input" type="search" id="patientFilterInput" placeholder="Paciente o doctor..." aria-label="Buscar por paciente o doctor" oninput="filterByPatient()">
+      <input class="filter-input" type="search" id="patientFilterInput" placeholder="Buscar paciente, doctor o código..." aria-label="Buscar por paciente, doctor o código" oninput="filterByPatient()">
     </div>
     <div class="board-caption"><div><h2>Flujo de trabajo</h2><p>Seleccioná una etapa para ver y avanzar alineadores.</p></div><span class="board-swipe-hint">Deslizá para recorrer las etapas <span>→</span></span></div>
     <div class="kanban-wrap"><div class="kanban" id="kanban"></div></div>
@@ -64,14 +65,15 @@
 
   <div id="view-casos" style="display:none">
     <div class="section-header">
-      <span class="section-title">Casos</span>
+      <div><span class="section-eyebrow">SEGUIMIENTO</span><span class="section-title">Casos</span><p class="section-description">Buscá pacientes, revisá plazos y abrí un caso para actualizar su avance.</p></div>
       <div class="filters-row" style="margin:0">
         <button class="filter-btn active" onclick="setCasosFilter('all',this)">Todos</button>
         <button class="filter-btn" onclick="setCasosFilter('urgente',this)">Urgentes</button>
         <button class="filter-btn" onclick="setCasosFilter('proximo',this)">Próximos</button>
-        <input class="filter-input" type="text" id="doctorFilterInput" placeholder="Doctor (ej. GM)..." oninput="filterByDoctor()">
+        <input class="filter-input" type="search" id="doctorFilterInput" placeholder="Paciente, doctor o código..." aria-label="Buscar paciente, doctor o código" oninput="filterByDoctor()">
       </div>
     </div>
+    <div class="cases-result-count" id="casesResultCount"></div>
     <div class="cases-list" id="casesList"></div>
   </div>
 
