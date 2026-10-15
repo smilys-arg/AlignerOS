@@ -1,1631 +1,582 @@
-// ==================== PWA ====================
-(function() {
-  const manifest = {
-    name: "AlignerOS",
-    short_name: "AlignerOS",
-    start_url: location.href,
-    display: "standalone",
-    background_color: "#f8fafc",
-    theme_color: "#2563eb",
-    icons: [{ src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cpolygon points='256,32 464,160 464,352 256,480 48,352 48,160' fill='%232563eb'/%3E%3Ctext x='256' y='300' text-anchor='middle' font-family='Inter,sans-serif' font-weight='bold' font-size='140' fill='white'%3EOS%3C/text%3E%3C/svg%3E", sizes: "512x512", type: "image/svg+xml" }]
-  };
-  const blob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
-  const manifestURL = URL.createObjectURL(blob);
-  const link = document.createElement('link');
-  link.rel = 'manifest';
-  link.href = manifestURL;
-  document.head.appendChild(link);
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
-  }
-})();
-
-// ==================== NOTIFICACIONES PUSH ====================
-async function requestNotificationPermission() {
-  if (!('Notification' in window)) { showToast('Este navegador no admite avisos'); return; }
-  const permission = Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
-  updateNotificationButton();
-  if (permission === 'granted') { showToast('Avisos de entrega activados'); checkUrgentNotifications(); }
-  else if (permission === 'denied') showToast('Los avisos estÃ¡n bloqueados en el navegador');
-}
-
-function updateNotificationButton() {
-  const button = document.getElementById('notificationBtn');
-  if (!button) return;
-  const enabled = 'Notification' in window && Notification.permission === 'granted';
-  button.classList.toggle('enabled', enabled);
-  button.textContent = 'ğŸ””';
-  button.title = enabled ? 'Avisos de entrega activados' : 'Activar avisos de entrega';
-  button.setAttribute('aria-label', button.title);
-}
-updateNotificationButton();
-
-const urgentNotificationSent = new Set();
-function checkUrgentNotifications() {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  const now = new Date(); now.setHours(0,0,0,0);
-  state.cases.forEach(c => {
-    const prio = getPrio(c.delivery);
-    if (prio === 'urgente' && !isCaseCompletelyFinished(c)) {
-      const d = daysUntil(c.delivery);
-      if (d <= 0) {
-        const key = `${c.id}:${c.delivery}:vencido`;
-        if (!urgentNotificationSent.has(key)) { new Notification(`âš  VENCIDO: ${c.patient}`, {body: `Fecha de entrega pasada`, icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Ccircle cx="50" cy="50" r="45" fill="%23dc2626"/%3E%3C/svg%3E'}); urgentNotificationSent.add(key); }
-      } else if (d === 1) {
-        const key = `${c.id}:${c.delivery}:maÃ±ana`;
-        if (!urgentNotificationSent.has(key)) { new Notification(`ğŸ”´ MAÃ‘ANA: ${c.patient}`, {body: `Queda 1 dÃ­a para la entrega`, icon: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"%3E%3Ccircle cx="50" cy="50" r="45" fill="%23f97316"/%3E%3C/svg%3E'}); urgentNotificationSent.add(key); }
-      }
-    }
-  });
-}
-setInterval(checkUrgentNotifications, 3600000);
-
-// ==================== VARIABLES GLOBALES ====================
-let repCtx = null, editingCaseId = null, editingStockId = null;
-let selection = { caseId:null, arcType:null, indices:new Set() };
-let editingFinanzaId = null;
-let pagoFinanzaId = null;
-let modoEgreso = false;
-let stlFiles = [];
-let pdfFiles = [];
-const undoStack = [];
-const activityLog = [];
-
-// ==================== FUNCIONES AUXILIARES ====================
-function daysFromNow(d){ const dt=new Date(); dt.setDate(dt.getDate()+d); return dt.toISOString().slice(0,10); }
-function makeArc(t){ return t ? { total:t, alinStates:new Array(t).fill(-1) } : null; }
-function makeCase(patient,doctor,doctorId,sup,inf,delivery,ingreso,egreso,obs){
-  return { id:uid(), patient, doctor, doctorId:doctorId||'', delivery, montoTotal: parseFloat(ingreso) || 0, egreso: parseFloat(egreso) || 0, obs, arcadas:{sup:makeArc(sup), inf:makeArc(inf)}, open:false };
-}
-function getPrio(d){ const t=new Date(); t.setHours(0,0,0,0); const diff=Math.ceil((new Date(d+'T00:00:00')-t)/86400000); return diff<=2?'urgente':diff<=5?'proximo':'ok'; }
-function daysUntil(d){ const t=new Date(); t.setHours(0,0,0,0); return Math.ceil((new Date(d+'T00:00:00')-t)/86400000); }
-function formatRanges(indices){
-  if(!indices.length) return '';
-  const sorted=[...indices].sort((a,b)=>a-b);
-  const parts=[]; let start=sorted[0], end=sorted[0];
-  for(let i=1;i<sorted.length;i++){
-    if(sorted[i]===end+1){ end=sorted[i]; }
-    else{ parts.push(start===end?`${start}`:`${start}-${end}`); start=sorted[i]; end=sorted[i]; }
-  }
-  parts.push(start===end?`${start}`:`${start}-${end}`);
-  return parts.join(',');
-}
-function isCaseCompletelyFinished(c) {
-  return ['sup','inf'].every(at => {
-    const arc = c.arcadas[at];
-    if (!arc) return true;
-    return arc.alinStates.every(st => st === FINAL_STAGE || st === -1);
-  });
-}
-
-// ==================== GESTIÃ“N DE STOCK DE PLANCHAS ====================
-function getPlanchaStock() {
-  let plancha = state.stock.find(s => s.name.toLowerCase().includes('planchas 0.75'));
-  if (!plancha) {
-    plancha = { id: uid(), name: 'Planchas 0.75mm', type: 'Planchas', qty: 100, min: 30, unit: 'lÃ¡minas', max: 200 };
-    state.stock.push(plancha);
-  }
-  return plancha;
-}
-
-function adjustStockOnStageChange(arc, idx, oldStage, newStage) {
-  if (oldStage === newStage) return;
-  if (newStage === 2 && oldStage !== 2) {
-    const plancha = getPlanchaStock();
-    plancha.qty = Math.max(0, plancha.qty - 1);
-  } else if (oldStage === 2 && newStage !== 2) {
-    const plancha = getPlanchaStock();
-    plancha.qty += 1;
-  }
-}
-
-// ==================== ESTADO ====================
-const state = {
-  cases: [], stock: [], finanzas: [], lastModified: 0,
-  kFilter: 'all', cFilter: 'all',
-  patientFilter: '', doctorFilter: '', doctorKanbanFilter: '',
-  finanzasGroup: false
-};
-
-// ==================== PILA DE DESHACER ====================
-function pushUndo() {
-  const snapshot = JSON.parse(JSON.stringify({ cases: state.cases, stock: state.stock }));
-  undoStack.push(snapshot);
-  if (undoStack.length > MAX_UNDO) undoStack.shift();
-  updateUndoButton();
-}
-
-function undo() {
-  if (undoStack.length === 0) return;
-  const prev = undoStack.pop();
-  state.cases = prev.cases;
-  state.stock = prev.stock;
-  clearSelection();
-  renderAll();
-  addActivity('âª Deshacer Ãºltimo cambio');
-  showToast('Cambio deshecho');
-  updateUndoButton();
-}
-
-function updateUndoButton() {
-  const btn = document.getElementById('btnUndo');
-  btn.disabled = undoStack.length === 0;
-  btn.textContent = `â†© Deshacer${undoStack.length ? ` (${undoStack.length})` : ''}`;
-}
-document.addEventListener('keydown', e => {
-  if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); }
-});
-
-// ==================== REGISTRO DE ACTIVIDAD ====================
-function addActivity(description) {
-  const now = new Date();
-  const time = now.toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit' });
-  activityLog.unshift({ time, desc: description });
-  if (activityLog.length > MAX_ACTIVITY) activityLog.pop();
-  updateActivityBadge();
-}
-
-function updateActivityBadge() {
-  const badge = document.getElementById('activityBadge');
-  const count = activityLog.length;
-  if (count > 0) {
-    badge.style.display = 'flex';
-    badge.textContent = Math.min(count, 99);
-  } else {
-    badge.style.display = 'none';
-  }
-}
-
-function openActivityModal() {
-  const content = document.getElementById('activityContent');
-  content.innerHTML = activityLog.length ? activityLog.map(a =>
-    `<div class="activity-item"><span class="activity-time">${a.time}</span><span class="activity-desc">${a.desc}</span></div>`
-  ).join('') : '<div style="padding:20px;text-align:center;color:var(--text3)">Sin actividad registrada</div>';
-  openModal('activityModal');
-}
-
-function clearActivity() {
-  if (confirm('Â¿Limpiar todo el historial de actividad?')) {
-    activityLog.length = 0;
-    updateActivityBadge();
-    closeModal('activityModal');
-    showToast('Historial limpiado');
-  }
-}
-
-// ==================== PERSISTENCIA ====================
-function loadState(){
-  try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw) {
-      const data = JSON.parse(raw);
-      if (data.cases && data.stock) {
-        state.cases = data.cases;
-        state.stock = data.stock;
-        state.finanzas = data.finanzas || [];
-        state.lastModified = data.lastModified || 0;
-        return;
-      }
-    }
-  } catch(e) {}
-  state.cases = buildCasesFromCSV(csvRaw);
-  state.stock = [
-    {id:uid(),name:'Planchas 0.75mm',type:'Planchas',qty:100,min:30,unit:'lÃ¡minas',max:200},
-    {id:uid(),name:'Planchas 1.0mm',type:'Planchas',qty:12,min:20,unit:'lÃ¡minas',max:100},
-    {id:uid(),name:'Resina UV',type:'Resina',qty:3,min:2,unit:'kg',max:10},
-    {id:uid(),name:'Bolsas',type:'Packaging',qty:180,min:50,unit:'unid',max:500},
-  ];
-  state.lastModified = Date.now();
-  saveState();
-}
-
-function saveState(){
-  try {
-    const data = { cases: state.cases, stock: state.stock, finanzas: state.finanzas, lastModified: state.lastModified };
-    localStorage.setItem(LS_KEY, JSON.stringify(data));
-    if (db && isOnline && !writeLock) {
-      writeLock = true;
-      const rootRef = db.ref('/');
-      rootRef.transaction(currentData => {
-        if (currentData && currentData.lastModified > state.lastModified) return;
-        return { ...data, lastModified: Date.now() };
-      }, (error, committed, snapshot) => {
-        writeLock = false;
-        if (error) {
-          console.error('TransacciÃ³n fallida:', error);
-          showToast('Error de sincronizaciÃ³n');
-        } else if (!committed) {
-          db.ref('/').once('value').then(snap => {
-            const remote = snap.val();
-            if (remote && remote.cases && remote.stock) {
-              state.cases = remote.cases;
-              state.stock = remote.stock;
-              state.lastModified = remote.lastModified || Date.now();
-              renderAll();
-              showToast('Datos actualizados desde otro dispositivo');
-            }
-          });
-        } else {
-          state.lastModified = snapshot.val().lastModified;
-        }
-      });
-    }
-  } catch(e) { console.error('Error al guardar', e); }
-}
-
-function setupFirebaseListener() {
-  if (!db) return;
-  db.ref('/').on('value', snap => {
-    if (writeLock) return;
-    const remote = snap.val();
-    if (remote && remote.cases && remote.stock && (!state.lastModified || remote.lastModified >= state.lastModified)) {
-      state.cases = remote.cases;
-      state.stock = remote.stock;
-      state.lastModified = remote.lastModified || Date.now();
-      clearSelection();
-      renderAll();
-      updateSyncStatus(true);
-    }
-  });
-  db.ref('.info/connected').on('value', snap => {
-    isOnline = snap.val() === true;
-    updateSyncStatus(isOnline);
-  });
-}
-
-function syncFromFirebase() {
-  if (db && isOnline) {
-    db.ref('/').once('value').then(snap => {
-      const remote = snap.val();
-      if (remote && remote.cases && remote.stock) {
-        state.cases = remote.cases;
-        state.stock = remote.stock;
-        state.lastModified = remote.lastModified || Date.now();
-        clearSelection();
-        renderAll();
-        saveState();
-        showToast('Sincronizado manualmente');
-        updateSyncStatus(true);
-      }
-    }).catch(() => showToast('Error al sincronizar'));
-  }
-}
-
-function updateSyncStatus(online) {
-  const dot = document.getElementById('syncDot');
-  const txt = document.getElementById('syncText');
-  if (online) { dot.className = 'sync-dot'; txt.textContent = 'Sincronizado'; }
-  else { dot.className = 'sync-dot offline'; txt.textContent = 'Offline'; }
-}
-
-// ==================== TIEMPO ESTIMADO ====================
-function calculateEstimatedTime() {
-  const timePerStage = [50/7, 5, 10, 0];
-  let totalMin = 0;
-  state.cases.forEach(c => {
-    ['sup','inf'].forEach(at => {
-      const arc = c.arcadas[at];
-      if (!arc) return;
-      arc.alinStates.forEach(st => { if (st >= 0 && st < FINAL_STAGE) totalMin += timePerStage[st] || 0; });
-    });
-  });
-  const hours = Math.floor(totalMin / 60);
-  const mins = Math.round(totalMin % 60);
-  return { totalMin, hours, mins };
-}
-
-// ==================== RENDERIZADOS ====================
-function renderAll() {
-  renderStats();
-  renderProgressBar();
-  renderAlerts();
-  renderKanban();
-  renderCases();
-  renderStock();
-  saveState();
-  renderFinanzas();
-}
-const render = renderAll;
-
-function countByStage() {
-  const cnt = {0:0,1:0,2:0,3:0};
-  state.cases.forEach(c => ['sup','inf'].forEach(at => {
-    const a = c.arcadas[at]; if(!a) return;
-    a.alinStates.forEach(st => { if(st>=0 && st<4) cnt[st]++; });
-  }));
-  return cnt;
-}
-
-function renderProgressBar() {
-  let totalAlin = 0, finishedAlin = 0;
-  state.cases.forEach(c => {
-    ['sup','inf'].forEach(at => {
-      const arc = c.arcadas[at];
-      if (!arc) return;
-      totalAlin += arc.total;
-      finishedAlin += arc.alinStates.filter(st => st === FINAL_STAGE).length;
-    });
-  });
-  const pct = totalAlin ? Math.round((finishedAlin / totalAlin) * 100) : 0;
-  const time = calculateEstimatedTime();
-  let timeStr = '';
-  if (time.hours > 0) timeStr += `${time.hours}h `;
-  timeStr += `${time.mins}min`;
-
-  document.getElementById('progressBarContainer').innerHTML = `
-    <div class="progress-bar-label">
-      <span>Progreso general</span>
-      <span>${finishedAlin} / ${totalAlin} alineadores (${pct}%)</span>
-    </div>
-    <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:${pct}%"></div></div>
-    <div class="time-estimate">â± Tiempo estimado de trabajo: <strong>${timeStr}</strong></div>
-  `;
-}
-
-function renderStats() {
-  const urg = state.cases.filter(c => getPrio(c.delivery)==='urgente' && !isCaseCompletelyFinished(c)).length;
-  const prox = state.cases.filter(c => getPrio(c.delivery)==='proximo' && !isCaseCompletelyFinished(c)).length;
-  const cnt = countByStage();
-  document.getElementById('statsGrid').innerHTML = `
-    <div class="stat-card priority-card"><span class="stat-symbol">!</span><div class="stat-label">Requieren atenciÃ³n</div><div class="stat-value ${urg>0?'urgent':''}">${urg}</div><div class="stat-foot">Vencen en 48 h o ya vencidos</div></div>
-    <div class="stat-card"><span class="stat-symbol">â—·</span><div class="stat-label">PrÃ³ximas entregas</div><div class="stat-value ${prox>0?'warning':''}">${prox}</div><div class="stat-foot">Dentro de los prÃ³ximos 5 dÃ­as</div></div>
-    <div class="stat-card"><span class="stat-symbol">â—«</span><div class="stat-label">Casos activos</div><div class="stat-value">${state.cases.length}</div><div class="stat-foot">Trabajos en el laboratorio</div></div>
-    <div class="stat-card stage-stat"><span class="stat-symbol">01</span><div class="stat-label">Para imprimir</div><div class="stat-value" style="color:var(--sp)">${cnt[0]}</div><div class="stat-foot">Alineadores pendientes</div></div>
-    <div class="stat-card stage-stat"><span class="stat-symbol">02</span><div class="stat-label">Termoformado</div><div class="stat-value" style="color:var(--st)">${cnt[1]}</div><div class="stat-foot">Alineadores pendientes</div></div>
-    <div class="stat-card stage-stat"><span class="stat-symbol">03</span><div class="stat-label">Corte y pulido</div><div class="stat-value" style="color:var(--sc)">${cnt[2]}</div><div class="stat-foot">Alineadores pendientes</div></div>
-    <div class="stat-card stage-stat"><span class="stat-symbol">04</span><div class="stat-label">Listos</div><div class="stat-value" style="color:var(--senv)">${cnt[3]}</div><div class="stat-foot">Para entrega o cierre</div></div>`;
-  const todayLabel = new Intl.DateTimeFormat('es-AR', { weekday:'long', day:'numeric', month:'long' }).format(new Date());
-  const dateEl = document.getElementById('productionDate');
-  if (dateEl) dateEl.textContent = `PANEL DEL TALLER Â· ${todayLabel.toLocaleUpperCase('es-AR')}`;
-}
-
-function renderAlerts() {
-  const a = [];
-  state.cases.forEach(c => {
-    const prio = getPrio(c.delivery);
-    if (!isCaseCompletelyFinished(c)) {
-      const d = daysUntil(c.delivery);
-      if (d <= 0) a.push({t:'critical', m:`â˜  VENCIDO: ${c.patient.split(',')[0]}`});
-      else if (d === 1) a.push({t:'red', m:`ğŸ”´ MAÃ‘ANA: ${c.patient.split(',')[0]}`});
-      else if (d === 2) a.push({t:'orange', m:`ğŸŸ  2 dÃ­as: ${c.patient.split(',')[0]}`});
-      else if (prio === 'proximo') a.push({t:'yellow', m:`ğŸŸ¡ ${d} dÃ­as: ${c.patient.split(',')[0]}`});
-    }
-  });
-  state.stock.forEach(s => { if(s.qty<=s.min) a.push({t:'yellow', m:`â¬¡ ${s.name} (${s.qty} ${s.unit})`}); });
-  if(!a.length) a.push({t:'green', m:'Todo en orden. No hay entregas urgentes ni materiales por reponer.'});
-  document.getElementById('alertsBar').innerHTML = a.map(x => `<div class="alert-pill ${x.t}"><div class="alert-dot"></div>${x.m}</div>`).join('');
-}
-
-// ==================== KANBAN ====================
-function renderKanban() {
-  const f = state.kFilter;
-  const searchTerm = state.patientFilter.trim().toLocaleLowerCase();
-  const doctorKanbanFilter = state.doctorKanbanFilter;
-  document.getElementById('kanban').innerHTML = SKEYS.map((key, stageIdx) => {
-    const color = Object.values(SCOLS)[stageIdx];
-    let cards = [];
-    state.cases.forEach(c => ['sup','inf'].forEach(at => {
-      const arc = c.arcadas[at]; if(!arc) return;
-      const indices = [];
-      arc.alinStates.forEach((st,i) => { if(st===stageIdx) indices.push(i); });
-      if(!indices.length) return;
-      if (doctorKanbanFilter && !(c.doctorId || '').toLowerCase().includes(doctorKanbanFilter)) return;
-      const searchableText = `${c.patient} ${c.doctor || ''} ${c.doctorId || ''} ${c.id || ''}`.toLocaleLowerCase();
-      if (searchTerm && !searchableText.includes(searchTerm)) return;
-      const p = getPrio(c.delivery);
-      if(f==='urgente' && p!=='urgente') return;
-      if(f==='proximo' && p!=='proximo') return;
-      if(f==='sup' && at!=='sup') return;
-      if(f==='inf' && at!=='inf') return;
-      cards.push({c,at,p,indices,arc});
-    }));
-    cards.sort((a,b)=> {
-      const priorityOrder = {urgente:0,proximo:1,ok:2};
-      const priorityDifference = priorityOrder[a.p] - priorityOrder[b.p];
-      if (priorityDifference) return priorityDifference;
-      const deadlineDifference = daysUntil(a.c.delivery) - daysUntil(b.c.delivery);
-      if (Number.isFinite(deadlineDifference) && deadlineDifference) return deadlineDifference;
-      return a.c.patient.localeCompare(b.c.patient, 'es');
-    });
-    const body = cards.length ? cards.map(it => {
-      const d = daysUntil(it.c.delivery);
-      const cardId = `${it.c.id}-${it.at}-${stageIdx}`;
-      const nextStage = stageIdx < 3 ? STAGES[stageIdx + 1] : 'Finalizado';
-      return `<div class="arc-card ${it.p}">
-        <div class="arc-top"><div style="min-width:0;flex:1"><div class="arc-patient">${it.c.patient.split(',')[0]}</div><div class="arc-doctor">${it.c.doctorId||it.c.doctor}</div></div><span class="arc-type ${it.at}">${it.at==='sup'?'SUPERIOR':'INFERIOR'}</span></div>
-        <div class="alin-range">
-          ${it.indices.map(i => {
-            const url = it.c.arcadas[it.at]?.stlUrls?.[i];
-            if (url) return `<a href="${url}" target="_blank" title="Descargar STL ${i}" style="text-decoration:none;color:var(--accent);font-weight:600" onclick="event.stopPropagation()">${i}</a>`;
-            return i;
-          }).join(' ')} (${it.indices.length} uds)
-        </div>
-        <div class="arc-bottom"><span class="delivery-chip ${it.p}"><span>ENTREGA</span> ${d<0?`${Math.abs(d)}d tarde`:d===0?'HOY':d===1?'MAÃ‘ANA':`${d} dÃ­as`}</span>
-        <div class="quick-btns">
-         <button class="qbtn" onmousedown="event.preventDefault(); toggleKanbanSelector('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Seleccionar</button>
-          <button class="qbtn done-btn" aria-label="Avanzar ${it.indices.length} alineadores a ${nextStage}" onclick="event.stopPropagation(); completeStage('${it.c.id}','${it.at}',${stageIdx})">Avanzar ${it.indices.length} â†’</button>
-        </div></div>
-        <div class="kanban-alin-selector" id="ksel-${cardId}" data-open-time="0">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px">
-            <span style="font-size:10px; color:var(--text3)">SeleccionÃ¡ alineadores</span>
-            <button onclick="event.stopPropagation(); document.getElementById('ksel-${cardId}').classList.remove('open')" style="background:none; border:none; color:var(--text3); cursor:pointer; font-size:14px">&times;</button>
-          </div>
-          <div style="margin-bottom:4px; display:flex; gap:4px">
-            <button onclick="event.stopPropagation(); selectAllInKanban('${cardId}', true)" style="font-size:10px; padding:2px 6px;">Todos</button>
-            <button onclick="event.stopPropagation(); selectAllInKanban('${cardId}', false)" style="font-size:10px; padding:2px 6px;">Ninguno</button>
-          </div>
-          <div class="alin-grid" id="ksel-grid-${cardId}" style="max-height:100px;overflow-y:auto;margin-bottom:6px"></div>
-          <select id="ksel-stage-${cardId}" class="form-input" style="margin-right:6px;padding:4px 8px;font-size:10px">
-            <option value="0">Imprimir</option><option value="1">Termoformar</option>
-            <option value="2">Corte/Pulido</option><option value="3">Listo</option>
-            <option value="4">Finalizado</option>
-          </select>
-          <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="event.stopPropagation(); moveSelectedFromKanban('${cardId}','${it.c.id}','${it.at}',${stageIdx})">Mover</button>
-        </div>
-      </div>`;
-    }).join('') : `<div class="empty-col"><div class="empty-icon">â—Œ</div>Sin pendientes</div>`;
-    const totalInStage = cards.reduce((sum, card) => sum + card.indices.length, 0);
-    return `<section class="kanban-col" id="stage-${stageIdx}"><div class="col-header"><div class="col-heading"><div class="col-title"><div class="col-dot" style="background:${color}"></div>${STAGES[stageIdx]}</div><span class="col-subtitle">${cards.length} trabajos Â· ${totalInStage} alineadores</span></div><span class="col-count">${cards.length}</span></div><div class="col-body">${body}</div></section>`;
-  }).join('');
-}
-
-function filterByPatient() {
-  state.patientFilter = document.getElementById('patientFilterInput').value;
-  renderKanban();
-}
-
-function filterByDoctorKanban() {
-  state.doctorKanbanFilter = document.getElementById('doctorKanbanFilter')?.value?.toLowerCase() || '';
-  renderKanban();
-}
-
-function selectAllInKanban(cardId, select) {
-  const items = document.querySelectorAll(`#ksel-grid-${cardId} .kanban-alin-item`);
-  items.forEach(el => el.classList.toggle('selected', select));
-}
-
-function toggleKanbanSelector(cardId, caseId, arcType, stageIdx) {
-  stageIdx = parseInt(stageIdx, 10);
-  const selector = document.getElementById(`ksel-${cardId}`);
-  if (!selector) return;
-  if (selector.classList.contains('open')) { selector.classList.remove('open'); return; }
-  document.querySelectorAll('.kanban-alin-selector.open').forEach(s => s.classList.remove('open'));
-  const c = state.cases.find(x => x.id === caseId);
-  if (!c) return;
-  const arc = c.arcadas[arcType];
-  if (!arc) return;
-  const indices = [];
-  arc.alinStates.forEach((st, i) => { if (st === stageIdx) indices.push(i); });
-  const grid = document.getElementById(`ksel-grid-${cardId}`);
-  grid.innerHTML = indices.map(i =>
-    `<span class="kanban-alin-item" data-idx="${i}" onclick="event.stopPropagation(); this.classList.toggle('selected')">${i}</span>`
-  ).join('');
-  selector.dataset.openTime = Date.now();
-  selector.classList.add('open');
-}
-
-function moveSelectedFromKanban(cardId, caseId, arcType, currentStageIdx) {
-  currentStageIdx = parseInt(currentStageIdx, 10);
-  const selector = document.getElementById(`ksel-${cardId}`);
-  if (!selector) return;
-  const selected = selector.querySelectorAll('.kanban-alin-item.selected');
-  if (selected.length === 0) { alert('SeleccionÃ¡ al menos un alineador'); return; }
-  const targetStage = parseInt(document.getElementById(`ksel-stage-${cardId}`).value, 10);
-  if (isNaN(targetStage)) return;
-  const c = state.cases.find(x => x.id === caseId);
-  if (!c) return;
-  const arc = c.arcadas[arcType];
-  if (!arc) return;
-  pushUndo();
-  let count = 0;
-  selected.forEach(el => {
-    const idx = parseInt(el.dataset.idx, 10);
-    if (!isNaN(idx) && arc.alinStates[idx] === currentStageIdx) {
-      const oldStage = arc.alinStates[idx];
-      arc.alinStates[idx] = targetStage;
-      adjustStockOnStageChange(arc, idx, oldStage, targetStage);
-      count++;
-    }
-  });
-  if (count > 0) {
-    selected.forEach(el => el.classList.remove('selected'));
-    selector.classList.remove('open');
-    addActivity(`âœï¸ Mover ${count} alin. de ${c.patient} a ${targetStage === FINAL_STAGE ? 'Finalizado' : STAGES[targetStage]}`);
-    renderAll();
-    showToast(`${count} alin. â†’ ${targetStage === FINAL_STAGE ? 'Finalizado' : STAGES[targetStage]}`);
-  } else {
-    alert('Ninguno de los alineadores seleccionados estÃ¡ en la etapa actual.');
-  }
-}
-
-document.addEventListener('click', function(e) {
-  const openSelectors = document.querySelectorAll('.kanban-alin-selector.open');
-  if (!openSelectors.length) return;
-  if (e.target.closest('.kanban-alin-selector.open') || e.target.closest('.quick-btns')) return;
-  openSelectors.forEach(s => {
-    const openTime = parseInt(s.dataset.openTime) || 0;
-    if (Date.now() - openTime > 200) s.classList.remove('open');
-  });
-});
-
-document.querySelectorAll('.quick-btns .qbtn').forEach(btn => {
-  btn.addEventListener('touchstart', function(e) { e.preventDefault(); }, {passive: false});
-});
-
-function completeStage(caseId, arcType, stageIdx) {
-  const c = state.cases.find(x=>x.id===caseId); if(!c) return;
-  const arc = c.arcadas[arcType]; if(!arc) return;
-  if(stageIdx !== null && stageIdx !== undefined) {
-    const next = stageIdx < 3 ? stageIdx + 1 : FINAL_STAGE;
-    const indicesToMove = [];
-    arc.alinStates.forEach((st,i) => { if(st===stageIdx) indicesToMove.push(i); });
-    if (!confirm(`Â¿Mover ${indicesToMove.length} alineadores a ${next===FINAL_STAGE?'Finalizado':STAGES[next]}?`)) return;
-    pushUndo();
-    let count = 0;
-    arc.alinStates.forEach((st,i) => {
-      if(st===stageIdx) {
-        const oldStage = arc.alinStates[i];
-        arc.alinStates[i] = next;
-        adjustStockOnStageChange(arc, i, oldStage, next);
-        count++;
-      }
-    });
-    if(count>0) {
-      addActivity(`âœ“ ${c.patient}: ${count} uds â†’ ${next===FINAL_STAGE?'Finalizado':STAGES[next]}`);
-      renderAll();
-      showToast(`${count} uds â†’ ${next===FINAL_STAGE?'Finalizado âœ“':STAGES[next]}`);
-    } else showToast('Sin alineadores en esa etapa');
-  } else {
-    let count = 0;
-    if (!confirm(`Â¿Avanzar todos los alineadores posibles de ${c.patient}?`)) return;
-    pushUndo();
-    arc.alinStates.forEach((st,i) => {
-      const old = st;
-      if(st>=0 && st<3) { arc.alinStates[i]=st+1; adjustStockOnStageChange(arc,i,old,st+1); count++; }
-      else if(st===3) { arc.alinStates[i]=FINAL_STAGE; adjustStockOnStageChange(arc,i,old,FINAL_STAGE); count++; }
-    });
-    if(count>0) { addActivity(`âœ“ ${c.patient}: ${count} alineadores avanzados`); renderAll(); showToast(`${count} alineadores avanzados`); }
-    else showToast('Nada para avanzar');
-  }
-}
-
-// ==================== CASOS ====================
-function renderCases() {
-  const f = state.cFilter;
-  let list = [...state.cases];
-  if (f !== 'all') list = list.filter(c => getPrio(c.delivery) === f);
-  if (state.doctorFilter) {
-    const df = state.doctorFilter.toLowerCase();
-    list = list.filter(c => `${c.patient || ''} ${c.doctor || ''} ${c.doctorId || ''} ${c.id || ''}`.toLocaleLowerCase().includes(df));
-  }
-  list.sort((a, b) => {
-    const da = daysUntil(a.delivery), db = daysUntil(b.delivery);
-    if (!Number.isFinite(da)) return 1;
-    if (!Number.isFinite(db)) return -1;
-    return da - db || (a.patient || '').localeCompare(b.patient || '', 'es');
-  });
-  const count = document.getElementById('casesResultCount');
-  if (count) count.textContent = state.doctorFilter || f !== 'all' ? `Mostrando ${list.length} de ${state.cases.length} casos` : `${list.length} casos Â· primero los que se entregan antes`;
-  const bmap = {urgente:'<span class="case-badge urgente">âš  URGENTE</span>',proximo:'<span class="case-badge proximo">â— PRÃ“XIMO</span>',ok:'<span class="case-badge ok">âœ“ OK</span>'};
-  const dcol = {urgente:'var(--red)',proximo:'var(--yellow)',ok:'var(--green)'};
-  const clsMap = ['print','thermo','cutpolish','listo'];
-  document.getElementById('casesList').innerHTML = list.length ? list.map(c => {
-    const p = getPrio(c.delivery); const d = daysUntil(c.delivery);
-    const arcHtml = ['sup','inf'].map(at => {
-      const arc = c.arcadas[at];
-      if (!arc) return '';
-      const lbl = at==='sup'?'â–² Superior':'â–¼ Inferior';
-      const stageCounts = {0:0,1:0,2:0,3:0};
-      arc.alinStates.forEach(st => { if(st>=0 && st<4) stageCounts[st]++; });
-      const summaryStr = `Impr:${stageCounts[0]} T:${stageCounts[1]} C/P:${stageCounts[2]} Listo:${stageCounts[3]}`;
-      const selSame = selection.caseId===c.id && selection.arcType===at;
-      const chips = arc.alinStates.map((st,i) => {
-        let cls = 'pendiente';
-        if(st>=0 && st<4) cls = clsMap[st];
-        else if(st===FINAL_STAGE) cls = 'done';
-        const sel = selSame && selection.indices.has(i) ? ' selected' : '';
-        const stlButton = (arc.stlUrls && arc.stlUrls[i]) 
-          ? `<a href="${arc.stlUrls[i]}" target="_blank" title="Descargar STL ${i}" onclick="event.stopPropagation()" class="stl-download-btn">ğŸ“</a>` 
-          : '';
-        return `<div style="display:inline-flex; align-items:center; gap:2px">
-          <span class="alin-chip ${cls}${sel}" onclick="event.stopPropagation();toggleAlin('${c.id}','${at}',${i})">${i}${st===FINAL_STAGE?'âœ“':''}</span>
-          ${stlButton}
-        </div>`;
-      }).join('');
-      const selCount = selSame ? selection.indices.size : 0;
-      const actHtml = selCount > 0 ? `
-        <div class="arcada-actions">
-          <select id="moveTarget-${c.id}-${at}" class="form-input" style="width:auto;padding:4px 8px;font-size:10px">
-            <option value="0">Imprimir</option><option value="1">Termoformar</option>
-            <option value="2">Corte/Pulido</option><option value="3">Listo</option>
-            <option value="4">Finalizado</option>
-          </select>
-          <button class="qbtn" style="color:var(--accent);border-color:var(--accent)" onclick="moveSelected('${c.id}','${at}')">Mover ${selCount}</button>
-          <button class="qbtn" style="color:var(--text3)" onclick="clearSelection()">âœ•</button>
-        </div>` : '';
-      return `<div class="arcada-block">
-        <div class="arcada-title">
-          <span class="arc-badge ${at}">${lbl}</span>
-          <span class="arc-total-lbl">${arc.total} alin.</span>
-          <span style="font-size:9px;color:var(--text3);margin-left:8px">${summaryStr}</span>
-        </div>
-        <div class="alin-grid">${chips}</div>
-        ${actHtml}
-        <div style="margin-top:6px"><button class="qbtn" onclick="event.stopPropagation();completeStage('${c.id}','${at}',null)">âœ“ Completar todo posible</button></div>
-      </div>`;
-    }).join('');
-    return `<div class="case-card ${c.open?'open':''}" id="case-${c.id}">
-      <div class="case-header">
-        <div class="case-info" onclick="toggleCase('${c.id}')">
-          <div class="case-prio-dot" style="background:${dcol[p]}"></div>
-          <div><div class="case-name">${c.patient}</div><div class="case-doctor">${c.doctorId||c.doctor}</div></div>
-        </div>
-        <div class="case-right">
-          ${bmap[p]} <span class="case-days" style="${d<=0?'color:var(--red)':''}">${d<=0?'VENCIDO':d+'d'}</span>
-          <button class="delete-case-btn" onclick="event.stopPropagation();editCase('${c.id}')">âœ</button>
-          <button class="delete-case-btn" onclick="event.stopPropagation();deleteCase('${c.id}')">ğŸ—‘</button>
-          <span class="chevron" onclick="toggleCase('${c.id}')">â–¶</span>
-        </div>
-      </div>
-      ${c.open ? `<div class="case-body"><div class="arcadas-grid">${arcHtml}</div>${(c.obs || (c.pdfUrls && c.pdfUrls.length)) ? `<div class="obs-note">${c.obs ? `ğŸ“ ${c.obs}` : ''}${(c.pdfUrls && c.pdfUrls.length) ? c.pdfUrls.map(p => `<div><a href="${p.url}" target="_blank" title="Descargar PDF">ğŸ“ ${p.name}</a></div>`).join('') : ''}</div>` : ''}</div>` : ''}
-    </div>`;
-  }).join('') : `<div class="empty-state"><span class="empty-state-icon">âŒ•</span><strong>No encontramos casos</strong><span>ProbÃ¡ con el nombre del paciente, el doctor o su cÃ³digo.</span></div>`;
-}
-
-function filterByDoctor() { state.doctorFilter = document.getElementById('doctorFilterInput').value; renderCases(); }
-function clearSelection() { selection={caseId:null,arcType:null,indices:new Set()}; renderCases(); }
-function toggleAlin(caseId, arcType, idx) {
-  if(selection.caseId!==caseId || selection.arcType!==arcType) {
-    selection = {caseId, arcType, indices: new Set([idx])};
-  } else {
-    if(selection.indices.has(idx)) selection.indices.delete(idx);
-    else selection.indices.add(idx);
-    if(selection.indices.size===0) clearSelection();
-  }
-  renderCases();
-}
-function moveSelected(caseId, arcType) {
-  const sel = document.getElementById(`moveTarget-${caseId}-${arcType}`);
-  if (!sel) { showToast('Error con el selector de etapa. Refresque el caso.'); return; }
-  const target = parseInt(sel.value);
-  if (isNaN(target)) return;
-  const c = state.cases.find(x => x.id === caseId); if(!c) return;
-  const arc = c.arcadas[arcType]; if(!arc) return;
-  if (selection.indices.size === 0) { showToast('SeleccionÃ¡ al menos un alineador'); return; }
-  if (!confirm(`Â¿Mover ${selection.indices.size} alineador(es) a ${target===FINAL_STAGE?'Finalizado':STAGES[target]}?`)) return;
-  pushUndo();
-  let count = 0;
-  selection.indices.forEach(i => {
-    const oldStage = arc.alinStates[i];
-    arc.alinStates[i] = target;
-    adjustStockOnStageChange(arc, i, oldStage, target);
-    count++;
-  });
-  clearSelection();
-  addActivity(`âœï¸ Mover ${count} alin. de ${c.patient}`);
-  renderAll();
-  showToast(`${count} alin. â†’ ${target===FINAL_STAGE?'Finalizado':STAGES[target]}`);
-}
-
-// ==================== CRUD CASOS ====================
-function openNewCase() {
-  editingCaseId = null;
-  document.getElementById('caseModalTitle').textContent = 'Nuevo caso';
-  document.getElementById('caseSubmitBtn').textContent = 'Crear';
-  ['f-patient','f-doctor','f-doctorId','f-sup','f-inf','f-obs'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('f-date').value = daysFromNow(7);
-  document.getElementById('f-ingreso').value = '';
-  document.getElementById('f-egreso').value = '';
-  stlFiles = [];
-  pdfFiles = [];
-  document.getElementById('stlPreview').innerHTML = '';
-  document.getElementById('pdfPreview').innerHTML = '';
-  document.getElementById('stlDropZone')?.classList.remove('dragover');
-  document.getElementById('pdfDropZone')?.classList.remove('dragover');
-  openModal('newCaseModal');
-}
-
-async function submitNewCase() {
-  const p = document.getElementById('f-patient').value.trim();
-  const dr = document.getElementById('f-doctor').value.trim();
-  const did = document.getElementById('f-doctorId').value.trim();
-  const s = parseInt(document.getElementById('f-sup').value) || 0;
-  const inf = parseInt(document.getElementById('f-inf').value) || 0;
-  const d = document.getElementById('f-date').value;
-  const ob = document.getElementById('f-obs').value.trim();
-  const ingreso = parseFloat(document.getElementById('f-ingreso')?.value) || 0;
-  const egreso = parseFloat(document.getElementById('f-egreso')?.value) || 0;
-
-  if (!p || !dr || !d) { alert('CompletÃ¡ paciente, doctor y fecha'); return; }
-
-  const resizeArc = (arc, newTotal) => {
-    if (!arc) return;
-    const oldTotal = arc.alinStates.length;
-    if (newTotal > oldTotal) { for (let i = oldTotal; i < newTotal; i++) arc.alinStates.push(-1); }
-    else if (newTotal < oldTotal) { arc.alinStates = arc.alinStates.slice(0, newTotal); }
-    arc.total = newTotal;
-  };
-
-  pushUndo();
-
-  if (editingCaseId) {
-    const c = state.cases.find(x => x.id === editingCaseId);
-    if (c) {
-      c.patient = p; c.doctor = dr; c.doctorId = did; c.delivery = d; c.obs = ob;
-      const tieneSup = stlFiles.some(f => f.arc === 'sup');
-      const tieneInf = stlFiles.some(f => f.arc === 'inf');
-      if (s > 0 || tieneSup) {
-        if (!c.arcadas.sup) c.arcadas.sup = makeArc(0);
-        resizeArc(c.arcadas.sup, Math.max(s, tieneSup ? Math.max(...stlFiles.filter(f=>f.arc==='sup').map(f=>f.step)) + 1 : 0));
-      } else if (!tieneSup) c.arcadas.sup = null;
-      if (inf > 0 || tieneInf) {
-        if (!c.arcadas.inf) c.arcadas.inf = makeArc(0);
-        resizeArc(c.arcadas.inf, Math.max(inf, tieneInf ? Math.max(...stlFiles.filter(f=>f.arc==='inf').map(f=>f.step)) + 1 : 0));
-      } else if (!tieneInf) c.arcadas.inf = null;
-      c.montoTotal = ingreso; c.egreso = egreso;
-    }
-    addActivity(`âœ Caso editado: ${p}`);
-  } else {
-    state.cases.unshift(makeCase(p, dr, did, s, inf, d, ingreso, egreso, ob));
-    addActivity(`â• Nuevo caso: ${p}`);
-  }
-  const caseId = editingCaseId || (state.cases[0]?.id);
-  if (caseId) {
-    await uploadSTLFiles(caseId);
-    await uploadPDFFiles(caseId);
-  }
-  closeModal('newCaseModal');
-  editingCaseId = null;
-  renderAll();
-  showToast('Caso guardado âœ“');
-}
-
-function editCase(id) {
-  const c = state.cases.find(x=>x.id===id); if(!c) return;
-  editingCaseId = id;
-  document.getElementById('caseModalTitle').textContent = 'Editar caso';
-  document.getElementById('caseSubmitBtn').textContent = 'Guardar cambios';
-  document.getElementById('f-patient').value = c.patient;
-  document.getElementById('f-doctor').value = c.doctor;
-  document.getElementById('f-doctorId').value = c.doctorId || '';
-  document.getElementById('f-sup').value = c.arcadas.sup?.total || '';
-  document.getElementById('f-inf').value = c.arcadas.inf?.total || '';
-  document.getElementById('f-date').value = c.delivery;
-  document.getElementById('f-ingreso').value = c.montoTotal || '';
-  document.getElementById('f-egreso').value = c.egreso || '';
-  document.getElementById('f-obs').value = c.obs || '';
-  stlFiles = [];
-  pdfFiles = [];
-  document.getElementById('stlPreview').innerHTML = '';
-  document.getElementById('pdfPreview').innerHTML = '';
-  document.getElementById('stlDropZone')?.classList.remove('dragover');
-  document.getElementById('pdfDropZone')?.classList.remove('dragover');
-  openModal('newCaseModal');
-}
-
-function deleteCase(id) {
-  if(!confirm('Â¿Eliminar este caso?')) return;
-  pushUndo();
-  const c = state.cases.find(c => c.id === id);
-  state.cases = state.cases.filter(c => c.id!==id);
-  clearSelection();
-  addActivity(`ğŸ—‘ Caso eliminado: ${c ? c.patient : id}`);
-  renderAll();
-  showToast('Caso eliminado');
-}
-
-// ==================== STOCK ====================
-function renderStock() {
-  document.getElementById('stockGrid').innerHTML = state.stock.map(s => {
-    const pct = Math.min(100, (s.qty/s.max)*100);
-    const lv = s.qty <= s.min ? 'low' : s.qty <= s.min*1.5 ? 'medium' : 'good';
-    return `<div class="stock-card">
-      <button class="stock-edit-btn" onclick="editStock('${s.id}')">âœ</button>
-      <div class="stock-name">${s.name}</div><div class="stock-type-lbl">${s.type}</div>
-      <div class="stock-level-row"><span class="stock-qty ${lv}">${s.qty}</span><span class="stock-unit-lbl">${s.unit}</span></div>
-      <div class="stock-bar-bg"><div class="stock-bar ${lv}" style="width:${pct}%"></div></div>
-      <div class="stock-min-lbl">MÃ­nimo: ${s.min} ${s.unit}</div>
-      ${lv==='low'?`<div class="stock-alert-msg">âš  Stock bajo</div>`:''}
-      <div class="stock-actions">
-        <button class="stock-btn" onclick="adjStock('${s.id}',-1)">âˆ’1</button>
-        <button class="stock-btn" onclick="adjStock('${s.id}',-5)">âˆ’5</button>
-        <button class="stock-btn primary" onclick="adjStock('${s.id}',10)">+10</button>
-        <button class="stock-btn primary" onclick="openReponer('${s.id}')">â†‘ Rep.</button>
-        <button class="stock-btn danger" onclick="deleteStock('${s.id}')">ğŸ—‘</button>
-      </div>
-    </div>`;
-  }).join('');
-}
-function openStockModal() {
-  editingStockId = null;
-  document.getElementById('stockModalTitle').textContent = 'Agregar material';
-  document.getElementById('stockSubmitBtn').textContent = 'Guardar';
-  ['sm-name','sm-unit','sm-qty','sm-min'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('sm-type').value = 'Planchas';
-  openModal('stockModal');
-}
-function editStock(id) {
-  const s = state.stock.find(x=>x.id===id);
-  if (!s) return;
-  editingStockId = id;
-  document.getElementById('stockModalTitle').textContent = 'Editar material';
-  document.getElementById('stockSubmitBtn').textContent = 'Guardar cambios';
-  document.getElementById('sm-name').value = s.name;
-  document.getElementById('sm-type').value = s.type;
-  document.getElementById('sm-unit').value = s.unit;
-  document.getElementById('sm-qty').value = s.qty;
-  document.getElementById('sm-min').value = s.min;
-  openModal('stockModal');
-}
-function submitStock() {
-  const name = document.getElementById('sm-name').value.trim();
-  if (!name) { alert('Nombre requerido'); return; }
-  pushUndo();
-  const type = document.getElementById('sm-type').value;
-  const unit = document.getElementById('sm-unit').value.trim() || 'unid';
-  const qty = parseInt(document.getElementById('sm-qty').value) || 0;
-  const min = parseInt(document.getElementById('sm-min').value) || 10;
-  if (editingStockId) {
-    const s = state.stock.find(x=>x.id===editingStockId);
-    if (s) { s.name = name; s.type = type; s.unit = unit; s.qty = qty; s.min = min; }
-    editingStockId = null;
-    addActivity(`âœ Material editado: ${name}`);
-  } else {
-    state.stock.push({ id:uid(), name, type, unit, qty, min, max: 200 });
-    addActivity(`â• Material agregado: ${name}`);
-  }
-  closeModal('stockModal');
-  renderAll();
-  showToast(editingStockId ? 'Material actualizado âœ“' : 'Material agregado âœ“');
-}
-function adjStock(id, delta) {
-  pushUndo();
-  const s = state.stock.find(x=>x.id===id);
-  if(s) { s.qty = Math.max(0, s.qty+delta); addActivity(`ğŸ”¢ Stock: ${s.name} ${delta>=0?'+'+delta:delta}`); renderAll(); }
-}
-function deleteStock(id) {
-  if(confirm('Eliminar?')) {
-    pushUndo();
-    const s = state.stock.find(x=>x.id===id);
-    state.stock = state.stock.filter(s=>s.id!==id);
-    addActivity(`ğŸ—‘ Material eliminado: ${s? s.name : id}`);
-    renderAll();
-  }
-}
-function openReponer(id) {
-  repCtx = id;
-  const s = state.stock.find(x=>x.id===id); if(!s) return;
-  document.getElementById('rm-title').textContent = `Reponer: ${s.name}`;
-  document.getElementById('rm-sub').textContent = `Actual: ${s.qty} ${s.unit}`;
-  openModal('reponerModal');
-}
-function addRepQty(n) { const i=document.getElementById('rm-inp'); i.value = (parseInt(i.value)||0) + n; }
-function confirmReponer() {
-  const n = parseInt(document.getElementById('rm-inp').value);
-  if(!n || n<=0) { alert('IngresÃ¡ cantidad'); return; }
-  pushUndo();
-  const s = state.stock.find(x=>x.id===repCtx);
-  if(s) { s.qty += n; addActivity(`ğŸ“¦ Reponer: ${s.name} +${n} ${s.unit}`); closeModal('reponerModal'); renderAll(); showToast(`+${n} ${s.unit}`); }
-}
-
-// ==================== TAREAS DIARIAS ====================
-function renderDailyTasks() {
-  const tasks = {};
-  const prioOrder = { urgente: 0, proximo: 1, ok: 2 };
-  state.cases.forEach(c => {
-    ['sup','inf'].forEach(at => {
-      const arc = c.arcadas[at];
-      if (!arc) return;
-      const indices = [];
-      arc.alinStates.forEach((st, i) => { if (st >= 0 && st < FINAL_STAGE) indices.push(i); });
-      if (indices.length === 0) return;
-      const stages = {};
-      indices.forEach(i => {
-        const st = arc.alinStates[i];
-        if (!stages[st]) stages[st] = [];
-        stages[st].push(i);
-      });
-      for (const [st, nums] of Object.entries(stages)) {
-        const stageIdx = parseInt(st);
-        if (!tasks[stageIdx]) tasks[stageIdx] = [];
-        tasks[stageIdx].push({
-          patient: c.patient, doctorId: c.doctorId, arcType: at,
-          numbers: nums, prio: getPrio(c.delivery), delivery: c.delivery
-        });
-      }
-    });
-  });
-
-  let html = '';
-  const stageColors = ['#2563eb','#7c3aed','#ea580c','#16a34a'];
-  for (let si = 0; si < SKEYS.length; si++) {
-    const list = tasks[si] || [];
-    list.sort((a, b) => si === 3 ? a.numbers.length - b.numbers.length : 0);
-    const totalAlin = list.reduce((sum, t) => sum + t.numbers.length, 0);
-    html += `<div class="task-stage-group">
-      <div class="task-stage-header" style="border-left:4px solid ${stageColors[si]}">
-        ${STAGES[si]} <span style="margin-left:auto;font-size:12px;color:var(--text2)">${totalAlin} alin.</span>
-      </div>`;
-    if (list.length === 0) {
-      html += '<div class="task-item"><span style="color:var(--text3)">Sin pendientes</span></div>';
-    } else {
-      list.forEach(t => {
-        const rangeStr = formatRanges(t.numbers);
-        const badgeClass = t.prio === 'urgente' ? 'urgent' : (t.prio === 'proximo' ? 'warning' : '');
-        const arcLabel = t.arcType === 'sup' ? 'â–²' : 'â–¼';
-        html += `<div class="task-item">
-          <span class="task-patient">${arcLabel} ${t.patient.split(',')[0]}</span>
-          <span class="task-range">${rangeStr}</span>
-          <span class="task-count">${t.numbers.length} uds</span>
-          ${badgeClass ? `<span class="task-badge ${badgeClass}">${t.prio.toUpperCase()}</span>` : ''}
-        </div>`;
-      });
-    }
-    html += '</div>';
-  }
-  document.getElementById('dailyTasks').innerHTML = html;
-}
-
-// ==================== COMANDOS POR VOZ ====================
-let recognition = null;
-let pendingVoiceActions = null;
-let voiceListening = false;
-
-function initSpeechRecognition() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    alert('Tu navegador no soporta reconocimiento de voz. ProbÃ¡ con Chrome o Safari.');
-    return;
-  }
-  recognition = new SpeechRecognition();
-  recognition.lang = 'es-ES';
-  recognition.interimResults = false;
-  recognition.maxAlternatives = 3;
-  recognition.onresult = (event) => {
-    let bestTranscript = '';
-    for (let i = 0; i < event.results[0].length; i++) {
-      const alt = event.results[0][i].transcript.trim();
-      if (alt.split(' ').length > bestTranscript.split(' ').length) bestTranscript = alt;
-    }
-    if (!bestTranscript) bestTranscript = event.results[0][0].transcript.trim();
-    if (bestTranscript) processVoiceCommand(bestTranscript.toLowerCase());
-    stopVoiceListening();
-  };
-  recognition.onerror = (event) => {
-    if (event.error === 'not-allowed') showToast('PermitÃ­ el micrÃ³fono en Ajustes > Safari > MicrÃ³fono');
-    else showToast('Error de voz: ' + event.error);
-    stopVoiceListening();
-  };
-  recognition.onend = () => stopVoiceListening();
-}
-
-function startVoiceCommand() {
-  if (!recognition) initSpeechRecognition();
-  if (!recognition) return;
-  if (voiceListening) { stopVoiceListening(); return; }
-  try {
-    recognition.start();
-    voiceListening = true;
-    updateMicButton(true);
-    showToast('ğŸ¤ Te escucho... (hablÃ¡ claro)');
-  } catch (e) {
-    showToast('Error al activar micrÃ³fono');
-    updateMicButton(false);
-    voiceListening = false;
-  }
-}
-
-function stopVoiceListening() {
-  if (recognition && voiceListening) {
-    try { recognition.stop(); } catch(e) {}
-    voiceListening = false;
-    updateMicButton(false);
-  }
-}
-
-function updateMicButton(active) {
-  const btn = document.querySelector('.btn-mic');
-  if (btn) {
-    btn.style.background = active ? 'var(--red)' : 'var(--accent)';
-    btn.textContent = active ? 'ğŸ¤' : 'ğŸ™ï¸';
-  }
-}
-
-const voiceStageMap = {
-  'imprimÃ­':0, 'imprimir':0, 'impresiÃ³n':0, 'impresion':0, 'imprimiendo':0,
-  'termoformÃ©':1, 'termoformar':1, 'termoformado':1, 'termoformando':1, 'termoforme':1,
-  'cortÃ©':2, 'cortar':2, 'corte':2, 'cortando':2,
-  'pulÃ­':2, 'pulir':2, 'pulido':2, 'puliendo':2,
-  'cortÃ© y pulÃ­':2, 'corte y pulido':2,
-  'listo':3, 'prepare':3, 'preparado':3, 'preparados':3, 'termindos':3, 'termine':3,
-  'lo mandÃ©':3, 'los mandÃ©':3, 'mandar':3, 'mandÃ©':3,
-  'entreguÃ©':4, 'entregar':4, 'entregado':4, 'entregados':4, 'finalicÃ©':4,
-  'finalizar':4, 'finalizado':4, 'finalice':4
-};
-
-const unidadesVoz = {
-  'cero':0, 'uno':1, 'una':1, 'dos':2, 'tres':3, 'cuatro':4,
-  'cinco':5, 'seis':6, 'siete':7, 'ocho':8, 'nueve':9
-};
-const especialesVoz = {
-  'diez':10, 'once':11, 'doce':12, 'trece':13, 'catorce':14,
-  'quince':15, 'diecisÃ©is':16, 'diecisiete':17, 'dieciocho':18,
-  'diecinueve':19, 'veinte':20, 'veintiuno':21, 'veintidÃ³s':22,
-  'veintitrÃ©s':23, 'veinticuatro':24, 'veinticinco':25, 'veintisÃ©is':26,
-  'veintisiete':27, 'veintiocho':28, 'veintinueve':29
-};
-const decenasVoz = {
-  'treinta':30, 'cuarenta':40, 'cincuenta':50, 'sesenta':60,
-  'setenta':70, 'ochenta':80, 'noventa':90
-};
-
-function normalizarNumeroPalabra(palabra) {
-  palabra = palabra.toLowerCase().trim();
-  if (unidadesVoz[palabra] !== undefined) return unidadesVoz[palabra];
-  if (especialesVoz[palabra] !== undefined) return especialesVoz[palabra];
-  if (decenasVoz[palabra] !== undefined) return decenasVoz[palabra];
-  return null;
-}
-
-function normalizeNumbers(text) {
-  let normalized = text.replace(
-    /\b(treinta|cuarenta|cincuenta|sesenta|setenta|ochenta|noventa)\s+y\s+(uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve)\b/gi,
-    (match, decena, unidad) => {
-      const dec = decenasVoz[decena.toLowerCase()];
-      const uni = unidadesVoz[unidad.toLowerCase()];
-      return (dec + uni).toString();
-    }
-  );
-  for (const [palabra, num] of Object.entries(especialesVoz)) {
-    normalized = normalized.replace(new RegExp('\\b' + palabra + '\\b', 'gi'), num.toString());
-  }
-  for (const [palabra, num] of Object.entries(unidadesVoz)) {
-    normalized = normalized.replace(new RegExp('\\b' + palabra + '\\b', 'gi'), num.toString());
-  }
-  for (const [palabra, num] of Object.entries(decenasVoz)) {
-    normalized = normalized.replace(new RegExp('\\b' + palabra + '(?!\\s+y)', 'gi'), num.toString());
-  }
-  return normalized;
-}
-
-function extractNumbers(text) {
-  const normalized = normalizeNumbers(text);
-  const numbers = [];
-  const rangeRegex = /(?:del\s+)?(\d+)\s*(?:al?|a|hasta|-)\s*(\d+)/g;
-  let match;
-  while ((match = rangeRegex.exec(normalized)) !== null) {
-    const start = parseInt(match[1]);
-    const end = parseInt(match[2]);
-    for (let i = Math.min(start, end); i <= Math.max(start, end); i++) {
-      if (!numbers.includes(i)) numbers.push(i);
-    }
-  }
-  const allDigits = normalized.match(/\d+/g);
-  if (allDigits) {
-    allDigits.forEach(numStr => {
-      const num = parseInt(numStr);
-      if (!numbers.includes(num)) numbers.push(num);
-    });
-  }
-  return numbers.sort((a,b)=>a-b);
-}
-
-function extractNumbersNearArc(text, arcType) {
-  const normalized = normalizeNumbers(text);
-  const arcWords = arcType === 'sup' 
-    ? ['superior', 'superiores', 'arriba', 'sup']
-    : ['inferior', 'inferiores', 'abajo', 'inf'];
-  const arcPositions = [];
-  for (const word of arcWords) {
-    let idx = normalized.indexOf(word);
-    while (idx !== -1) {
-      arcPositions.push({ index: idx, word });
-      idx = normalized.indexOf(word, idx + 1);
-    }
-  }
-  if (arcPositions.length === 0) return [];
-  const allNumbers = new Set();
-  const windowSize = 80;
-  arcPositions.forEach(pos => {
-    const start = Math.max(0, pos.index - windowSize);
-    const end = Math.min(normalized.length, pos.index + pos.word.length + windowSize);
-    const fragment = normalized.substring(start, end);
-    const numbersInFragment = extractNumbers(fragment);
-    numbersInFragment.forEach(n => allNumbers.add(n));
-  });
-  return [...allNumbers].sort((a,b)=>a-b);
-}
-
-function findPatientMention(text) {
-  const words = text.toLowerCase().split(/[\s,;.]+/);
-  for (const word of words) {
-    if (word.length < 2) continue;
-    const match = state.cases.find(c => 
-      c.patient.toLowerCase().includes(word) ||
-      (c.doctorId && c.doctorId.toLowerCase().includes(word))
-    );
-    if (match) return match;
-  }
-  return null;
-}
-
-function processVoiceCommand(transcript) {
-  let targetStage = -1;
-  for (const [word, stage] of Object.entries(voiceStageMap)) {
-    if (transcript.includes(word)) { targetStage = stage; break; }
-  }
-  if (targetStage === -1) {
-    showToast('No entendÃ­ la etapa. DecÃ­: "imprimir", "termoformar", "cortar/pulir", "listo" o "finalizado".');
-    return;
-  }
-  const matchedCase = findPatientMention(transcript);
-  if (!matchedCase) { showToast('No reconocÃ­ el paciente.'); return; }
-  const supNumbers = extractNumbersNearArc(transcript, 'sup');
-  const infNumbers = extractNumbersNearArc(transcript, 'inf');
-  if (supNumbers.length === 0 && infNumbers.length === 0) {
-    const allNumbers = extractNumbers(transcript);
-    if (allNumbers.length === 0) { showToast('No escuchÃ© nÃºmeros.'); return; }
-    if (matchedCase.arcadas.sup) supNumbers.push(...allNumbers);
-    if (matchedCase.arcadas.inf) infNumbers.push(...allNumbers);
-  }
-  pendingVoiceActions = { targetStage, matchedCase, actions: [] };
-  if (supNumbers.length > 0 && matchedCase.arcadas.sup) {
-    pendingVoiceActions.actions.push({ arcType: 'sup', numbers: [...new Set(supNumbers)].sort((a,b)=>a-b) });
-  }
-  if (infNumbers.length > 0 && matchedCase.arcadas.inf) {
-    pendingVoiceActions.actions.push({ arcType: 'inf', numbers: [...new Set(infNumbers)].sort((a,b)=>a-b) });
-  }
-  if (pendingVoiceActions.actions.length === 0) { showToast('No hay alineadores para mover.'); return; }
-  renderVoiceConfirmation(matchedCase.patient, targetStage);
-}
-
-function renderVoiceConfirmation(patientName, targetStage) {
-  if (!pendingVoiceActions) return;
-  const content = document.getElementById('voiceConfirmContent');
-  const stageNames = STAGES.concat(['Finalizado']);
-  let html = `<p>Paciente: <strong>${pendingVoiceActions.matchedCase.patient}</strong></p>`;
-  html += `<p>Etapa: <strong>${stageNames[targetStage]}</strong></p>`;
-  html += '<p>Alineadores:</p><ul>';
-  pendingVoiceActions.actions.forEach(a => {
-    const arcName = a.arcType === 'sup' ? 'Superior' : 'Inferior';
-    html += `<li>${arcName}: ${a.numbers.join(', ')}</li>`;
-  });
-  html += '</ul>';
-  content.innerHTML = html;
-  openModal('voiceConfirmModal');
-}
-
-function executeVoiceCommand() {
-  if (!pendingVoiceActions) return;
-  const { matchedCase, actions, targetStage } = pendingVoiceActions;
-  let movedCount = 0;
-  actions.forEach(action => {
-    const arc = matchedCase.arcadas[action.arcType];
-    if (!arc) return;
-    action.numbers.forEach(i => {
-      if (i >= 0 && i < arc.total) {
-        const oldStage = arc.alinStates[i];
-        arc.alinStates[i] = targetStage;
-        adjustStockOnStageChange(arc, i, oldStage, targetStage);
-        movedCount++;
-      }
-    });
-  });
-  if (movedCount > 0) {
-    addActivity(`ğŸ¤ Voz: ${matchedCase.patient} - ${movedCount} alin. â†’ ${STAGES[targetStage] || 'Finalizado'}`);
-    renderAll();
-    showToast(`${movedCount} alin. movidos por voz âœ“`);
-  } else showToast('No se pudo mover ningÃºn alineador.');
-  closeModal('voiceConfirmModal');
-  pendingVoiceActions = null;
-}
-
-document.addEventListener('keydown', e => {
-  if (e.ctrlKey && e.key === 'm') { e.preventDefault(); startVoiceCommand(); }
-});
-
-// ==================== FINANZAS ====================
-state.finanzasFilter = 'all';
-state.finanzaPacienteFilter = '';
-state.finanzaMesFilter = '';
-state.finanzasGroup = false;
-
-function setFinanzasFilter(f, el) {
-  state.finanzasFilter = f;
-  document.querySelectorAll('#view-finanzas .filters-row .filter-btn').forEach(b => b.classList.remove('active'));
-  if (el) el.classList.add('active');
-  renderFinanzas();
-}
-
-function filterFinanzas() {
-  state.finanzaPacienteFilter = document.getElementById('finanzaPacienteFilter').value;
-  state.finanzaMesFilter = document.getElementById('finanzaMesFilter').value;
-  renderFinanzas();
-}
-
-function toggleFinanzasGroup() {
-  state.finanzasGroup = !state.finanzasGroup;
-  document.querySelector('#view-finanzas .filters-row .filter-btn:last-child').classList.toggle('active', state.finanzasGroup);
-  renderFinanzas();
-}
-
-function renderFinanzas() {
-  if (document.getElementById('view-finanzas').style.display === 'none') return;
-
-  const finanzasDesdeCasos = state.cases
-    .filter(c => (c.montoTotal || 0) > 0 || (c.egreso || 0) > 0)
-    .map(c => {
-      const manual = state.finanzas.find(f => f.caseId === c.id);
-      return {
-        id: c.id, caseId: c.id, patient: c.patient, doctorId: c.doctorId,
-        montoTotal: c.montoTotal || 0, egreso: c.egreso || 0,
-        pagos: manual ? (manual.pagos || []) : [],
-        egresos: manual ? (manual.egresos || []) : [],
-        fechaEntrega: c.delivery, notas: c.obs || ''
-      };
-    });
-  const caseIdsConFinanzas = finanzasDesdeCasos.map(f => f.caseId);
-  const finanzasManuales = state.finanzas.filter(f => !caseIdsConFinanzas.includes(f.caseId));
-  let lista = [...finanzasDesdeCasos, ...finanzasManuales];
-
-  const pacienteFiltro = state.finanzaPacienteFilter.toLowerCase();
-  const mesFiltro = state.finanzaMesFilter;
-  lista = lista.filter(f => {
-    if (pacienteFiltro && !f.patient.toLowerCase().includes(pacienteFiltro)) return false;
-    if (mesFiltro) {
-      if (!f.fechaEntrega) return false;
-      const fecha = new Date(f.fechaEntrega + 'T00:00:00');
-      const mesRegistro = `${fecha.getFullYear()}-${String(fecha.getMonth()+1).padStart(2,'0')}`;
-      if (mesRegistro !== mesFiltro) return false;
-    }
-    return true;
-  });
-
-  if (state.finanzasFilter === 'pendiente') {
-    lista = lista.filter(f => f.pagos.reduce((s,p)=>s+p.monto,0) < f.montoTotal);
-  } else if (state.finanzasFilter === 'completo') {
-    lista = lista.filter(f => f.pagos.reduce((s,p)=>s+p.monto,0) >= f.montoTotal);
-  }
-
-  let totalCobrar = 0, totalCobrado = 0, totalEgresos = 0, pendientes = 0;
-  state.finanzas.forEach(f => {
-    totalCobrar += f.montoTotal;
-    const pagado = f.pagos.reduce((s,p)=>s+p.monto,0);
-    totalCobrado += pagado;
-    if (f.egresos) totalEgresos += f.egresos.reduce((s,e)=>s+e.monto,0);
-    if (pagado < f.montoTotal) pendientes++;
-  });
-  finanzasDesdeCasos.forEach(f => {
-    if (!state.finanzas.some(x => x.caseId === f.caseId)) totalCobrar += f.montoTotal;
-  });
-  const balance = totalCobrado - totalEgresos;
-
-  document.getElementById('finanzasResumen').innerHTML = `
-    <div class="stat-card"><div class="stat-label">Total a cobrar</div><div class="stat-value" style="color:var(--accent)">$${totalCobrar.toFixed(0)}</div></div>
-    <div class="stat-card"><div class="stat-label">Total cobrado</div><div class="stat-value" style="color:var(--green)">$${totalCobrado.toFixed(0)}</div></div>
-    <div class="stat-card"><div class="stat-label">Pendientes</div><div class="stat-value" style="color:var(--red)">${pendientes}</div></div>
-    <div class="stat-card"><div class="stat-label">PrÃ³x. venc.</div><div class="stat-value" style="color:var(--yellow)">${proximosVencimientos()}</div></div>
-    <div class="stat-card"><div class="stat-label">Egresos</div><div class="stat-value" style="color:var(--red)">$${totalEgresos.toFixed(0)}</div></div>
-    <div class="stat-card"><div class="stat-label">Balance</div><div class="stat-value" style="color:${balance >= 0 ? 'var(--green)' : 'var(--red)'}">$${balance.toFixed(0)}</div></div>
-  `;
-
-  if (state.finanzasGroup) {
-    const grouped = {};
-    lista.forEach(f => {
-      const key = f.doctorId || 'Sin doctor';
-      if (!grouped[key]) grouped[key] = { doctorId: key, montoTotal: 0, pagado: 0, egreso: 0, count: 0 };
-      grouped[key].montoTotal += f.montoTotal;
-      grouped[key].pagado += f.pagos.reduce((s,p)=>s+p.monto,0);
-      grouped[key].egreso += f.egreso || 0;
-      (f.egresos || []).forEach(e => grouped[key].egreso += e.monto);
-      grouped[key].count++;
-    });
-    document.getElementById('finanzasList').innerHTML = Object.values(grouped).map(g => `
-      <div class="finanza-card">
-        <div class="finanza-header"><span class="finanza-paciente">${g.doctorId}</span><span>${g.count} casos</span></div>
-        <div class="finanza-montos">
-          <span>Total: $${g.montoTotal.toFixed(0)}</span>
-          <span>Cobrado: $${g.pagado.toFixed(0)}</span>
-          <span>Egreso: $${g.egreso.toFixed(0)}</span>
-          <span>Balance: $${(g.pagado - g.egreso).toFixed(0)}</span>
-        </div>
-      </div>
-    `).join('');
-    return;
-  }
-
-  document.getElementById('finanzasList').innerHTML = lista.map(f => {
-    const pagado = f.pagos.reduce((s,p)=>s+p.monto,0);
-    const restante = f.montoTotal - pagado;
-    let estado = 'pendiente';
-    if (pagado >= f.montoTotal) estado = 'completo';
-    else if (pagado > 0) estado = 'parcial';
-    return `<div class="finanza-card">
-      <div class="finanza-header">
-        <span class="finanza-paciente">${f.doctorId ? f.doctorId + ' Â· ' : ''}${f.patient}</span>
-        <span class="finanza-estado ${estado}">${estado.toUpperCase()}</span>
-      </div>
-      <div class="finanza-montos">
-        <span>Total: <strong>$${f.montoTotal.toFixed(2)}</strong></span>
-        <span>Cobrado: <strong>$${pagado.toFixed(2)}</strong></span>
-        <span>Resta: <strong>$${restante.toFixed(2)}</strong></span>
-        ${f.egreso ? `<span>Egreso base: <strong>$${f.egreso.toFixed(2)}</strong></span>` : ''}
-      </div>
-      ${f.fechaEntrega ? `<div style="font-size:11px;color:var(--text3)">Entrega: ${f.fechaEntrega}</div>` : ''}
-      <div class="finanza-pagos">
-        ${f.pagos.map(p => `<div class="finanza-pago-item"><span>${p.fecha} Â· ${p.metodo}</span><span>+ $${p.monto.toFixed(2)}</span></div>`).join('')}
-      </div>
-      <div class="finanza-egresos" style="margin-top:6px">
-        ${f.egresos && f.egresos.length > 0 ? '<div style="font-size:10px;color:var(--text3);margin-bottom:4px">Egresos adicionales:</div>' : ''}
-        ${(f.egresos || []).map(e => `<div class="finanza-pago-item" style="color:var(--red)"><span>${e.fecha} Â· ${e.concepto || 'Gasto'}</span><span>- $${e.monto.toFixed(2)}</span></div>`).join('')}
-      </div>
-      <div class="finanza-actions">
-        <button class="qbtn" onclick="registrarPago('${f.id}')">+ Pago</button>
-        <button class="qbtn" style="color:var(--red)" onclick="registrarEgreso('${f.id}')">- Egreso</button>
-        <button class="qbtn" onclick="editarFinanza('${f.id}')">âœ</button>
-        <button class="qbtn" style="color:var(--red)" onclick="eliminarFinanza('${f.id}')">ğŸ—‘</button>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function proximosVencimientos() {
-  const hoy = new Date(); hoy.setHours(0,0,0,0);
-  let count = 0;
-  state.finanzas.forEach(f => {
-    if (!f.fechaEntrega) return;
-    const fecha = new Date(f.fechaEntrega + 'T00:00:00');
-    const diff = Math.ceil((fecha - hoy) / 86400000);
-    if (diff >= 0 && diff <= 7) count++;
-  });
-  return count;
-}
-
-function openFinanzaModal(id = null) {
-  const select = document.getElementById('ff-case');
-  select.innerHTML = '<option value="">Seleccionar caso...</option>' +
-    state.cases.map(c => `<option value="${c.id}">${c.doctorId || 'SIN'} Â· ${c.patient} (Caso #${c.doctorId?.slice(2) || '?'})</option>`).join('');
-  if (id) {
-    const f = state.finanzas.find(x => x.id === id);
-    if (!f) return;
-    editingFinanzaId = id;
-    document.getElementById('finanzaModalTitle').textContent = 'Editar registro';
-    document.getElementById('finanzaSubmitBtn').textContent = 'Guardar cambios';
-    document.getElementById('ff-case').value = f.caseId || '';
-    document.getElementById('ff-monto').value = f.montoTotal;
-    document.getElementById('ff-fecha').value = f.fechaEntrega || '';
-    document.getElementById('ff-notas').value = f.notas || '';
-  } else {
-    editingFinanzaId = null;
-    document.getElementById('finanzaModalTitle').textContent = 'Nuevo registro';
-    document.getElementById('finanzaSubmitBtn').textContent = 'Guardar';
-    document.getElementById('ff-case').value = '';
-    document.getElementById('ff-monto').value = '';
-    document.getElementById('ff-fecha').value = '';
-    document.getElementById('ff-notas').value = '';
-  }
-  openModal('finanzaModal');
-}
-
-function submitFinanza() {
-  const caseId = document.getElementById('ff-case').value;
-  const patient = state.cases.find(c => c.id === caseId)?.patient || 'Sin caso';
-  const caso = state.cases.find(c => c.id === caseId);
-  const doctorId = caso?.doctorId || '';
-  const montoTotal = parseFloat(document.getElementById('ff-monto').value) || 0;
-  const fechaEntrega = document.getElementById('ff-fecha').value;
-  const notas = document.getElementById('ff-notas').value.trim();
-  if (editingFinanzaId) {
-    const f = state.finanzas.find(x => x.id === editingFinanzaId);
-    if (f) { f.caseId = caseId; f.patient = patient; f.montoTotal = montoTotal; f.fechaEntrega = fechaEntrega; f.notas = notas; }
-    editingFinanzaId = null;
-  } else {
-    state.finanzas.push({ id:uid(), caseId, patient, montoTotal, pagos:[], egresos:[], fechaEntrega, notas });
-  }
-  closeModal('finanzaModal');
-  renderAll();
-  showToast('Registro guardado âœ“');
-}
-
-function editarFinanza(id) { openFinanzaModal(id); }
-
-function eliminarFinanza(id) {
-  if (!confirm('Â¿Eliminar este registro financiero?')) return;
-  state.finanzas = state.finanzas.filter(f => f.id !== id);
-  renderAll();
-  showToast('Registro eliminado');
-}
-
-function registrarPago(id) {
-  const f = state.finanzas.find(x => x.id === id);
-  if (!f) return;
-  pagoFinanzaId = id;
-  document.getElementById('fp-caso').textContent = f.patient;
-  document.getElementById('fp-monto').value = '';
-  document.getElementById('fp-fecha').value = new Date().toISOString().slice(0,10);
-  document.getElementById('fp-metodo').value = 'Efectivo';
-  document.getElementById('fp-notas').value = '';
-  openModal('pagoModal');
-  modoEgreso = false;
-}
-
-function confirmarPago() {
-  const monto = parseFloat(document.getElementById('fp-monto').value) || 0;
-  if (monto <= 0) { alert('IngresÃ¡ un monto vÃ¡lido'); return; }
-  const f = state.finanzas.find(x => x.id === pagoFinanzaId);
-  if (!f) return;
-  if (modoEgreso) {
-    f.egresos = f.egresos || [];
-    f.egresos.push({
-      fecha: document.getElementById('fp-fecha').value,
-      monto,
-      concepto: document.getElementById('fp-metodo').value,
-      notas: document.getElementById('fp-notas').value.trim()
-    });
-  } else {
-    f.pagos.push({
-      fecha: document.getElementById('fp-fecha').value,
-      monto,
-      metodo: document.getElementById('fp-metodo').value,
-      notas: document.getElementById('fp-notas').value.trim()
-    });
-  }
-  closeModal('pagoModal');
-  renderAll();
-  showToast(modoEgreso ? 'Egreso registrado' : 'Pago registrado');
-  modoEgreso = false;
-}
-
-function registrarEgreso(id) {
-  const f = state.finanzas.find(x => x.id === id);
-  if (!f) return;
-  pagoFinanzaId = id;
-  document.getElementById('fp-caso').textContent = 'Egreso: ' + f.patient;
-  document.getElementById('fp-monto').value = '';
-  document.getElementById('fp-fecha').value = new Date().toISOString().slice(0,10);
-  document.getElementById('fp-metodo').value = 'Varios';
-  document.getElementById('fp-notas').value = '';
-  openModal('pagoModal');
-  modoEgreso = true;
-}
-
-// ==================== SUBIDA STL (Supabase) ====================
-async function handleSTLDrop(e) {
-  e.preventDefault();
-  document.getElementById('stlDropZone').classList.remove('dragover');
-  const files = e.dataTransfer.files;
-  if (files.length) await processSTLFiles(files);
-}
-
-async function handleSTLFiles(inputFiles) {
-  await processSTLFiles(inputFiles);
-}
-
-async function processSTLFiles(files) {
-  const fileList = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.stl'));
-  if (!fileList.length) { showToast('Solo se permiten archivos .stl'); return; }
-  stlFiles = [];
-  const regex = /[-_\s](mandible|maxilla)[-_\s]*(\d+)\.stl$/i;
-  const parsed = { sup: {}, inf: {} };
-  for (const file of fileList) {
-    const match = file.name.match(regex);
-    if (!match) { showToast(`Formato incorrecto: ${file.name}`); continue; }
-    const arc = match[1].toLowerCase() === 'maxilla' ? 'sup' : 'inf';
-    const step = parseInt(match[2]);
-    if (!parsed[arc][step]) parsed[arc][step] = file;
-  }
-  for (const [arc, steps] of Object.entries(parsed)) {
-    for (const [step, file] of Object.entries(steps)) {
-      stlFiles.push({ file, arc, step: parseInt(step) });
-    }
-  }
-  const supMax = Object.keys(parsed.sup).map(Number).sort((a,b)=>b-a)[0] ?? -1;
-  const infMax = Object.keys(parsed.inf).map(Number).sort((a,b)=>b-a)[0] ?? -1;
-  if (supMax >= 0) document.getElementById('f-sup').value = supMax + 1;
-  if (infMax >= 0) document.getElementById('f-inf').value = infMax + 1;
-
-  let html = '';
-  if (Object.keys(parsed.sup).length) html += `<div>â–² Superior: ${Object.keys(parsed.sup).map(Number).sort((a,b)=>a-b).join(', ')}</div>`;
-  if (Object.keys(parsed.inf).length) html += `<div>â–¼ Inferior: ${Object.keys(parsed.inf).map(Number).sort((a,b)=>a-b).join(', ')}</div>`;
-  document.getElementById('stlPreview').innerHTML = html || 'NingÃºn archivo vÃ¡lido';
-  showToast(`${stlFiles.length} archivos listos`);
-}
-
-async function uploadSTLFiles(caseId) {
-  if (!stlFiles.length) return;
-  const c = state.cases.find(x => x.id === caseId);
-  if (!c) return;
-  for (const {file, arc, step} of stlFiles) {
-    const path = `${caseId}/${arc}/${step}.stl`;
-    const { error } = await supabaseClient.storage.from('stl-files').upload(path, file, { upsert: true });
-    if (error) { console.error('Error al subir STL:', error); continue; }
-    const { data: urlData } = supabaseClient.storage.from('stl-files').getPublicUrl(path);
-    if (!c.arcadas[arc].stlUrls) c.arcadas[arc].stlUrls = {};
-    c.arcadas[arc].stlUrls[step] = urlData.publicUrl;
-  }
-  stlFiles = [];
-  document.getElementById('stlPreview').innerHTML = '';
-}
-
-// ==================== SUBIDA PDFs (Supabase) ====================
-async function handlePDFDrop(e) {
-  e.preventDefault();
-  document.getElementById('pdfDropZone').classList.remove('dragover');
-  const files = e.dataTransfer.files;
-  if (files.length) await processPDFFiles(files);
-}
-
-async function handlePDFFiles(inputFiles) {
-  await processPDFFiles(inputFiles);
-}
-
-async function processPDFFiles(files) {
-  const fileList = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.pdf'));
-  if (!fileList.length) { showToast('Solo se permiten archivos .pdf'); return; }
-  if (fileList.length > 3) { showToast('MÃ¡ximo 3 archivos PDF'); return; }
-  pdfFiles = fileList.map(file => ({ file }));
-  document.getElementById('pdfPreview').innerHTML = pdfFiles.map(f => `ğŸ“„ ${f.file.name}`).join('<br>');
-  showToast(`${pdfFiles.length} PDF(s) listos`);
-}
-
-async function uploadPDFFiles(caseId) {
-  if (!pdfFiles.length) return;
-  const c = state.cases.find(x => x.id === caseId);
-  if (!c) return;
-  if (!c.pdfUrls) c.pdfUrls = [];
-  for (const {file} of pdfFiles) {
-    const path = `pdfs/${caseId}/${file.name}`;
-    const { error } = await supabaseClient.storage.from('stl-files').upload(path, file, { upsert: true });
-    if (!error) {
-      const { data: urlData } = supabaseClient.storage.from('stl-files').getPublicUrl(path);
-      c.pdfUrls.push({ name: file.name, url: urlData.publicUrl });
-    } else console.error('Error al subir PDF:', error);
-  }
-  pdfFiles = [];
-  document.getElementById('pdfPreview').innerHTML = '';
-}
-
-// ==================== NAVEGACIÃ“N Y MODALES ====================
-function switchView(v, el) {
-  document.querySelectorAll('.desktop-nav .tab, .bnav-item').forEach(b => b.classList.remove('active'));
-  if(el) el.classList.add('active');
-  ['kanban','casos','stock','tareas','finanzas'].forEach(x => document.getElementById('view-'+x).style.display = x===v ? '' : 'none');
-  const labels = {kanban:'ProducciÃ³n',casos:'Casos',stock:'Materiales',tareas:'Trabajo diario',finanzas:'Finanzas'};
-  const actions = {stock:{label:'ï¼‹ Agregar material',run:openStockModal},finanzas:{label:'ï¼‹ Nuevo registro',run:openFinanzaModal}};
-  const topbarLabel = document.getElementById('topbarLabel');
-  if (topbarLabel) topbarLabel.textContent = labels[v] || 'AlignerOS';
-  const newButton = document.querySelector('.topbar .btn-new');
-  if (newButton) newButton.innerHTML = actions[v] ? actions[v].label : '<span>ï¼‹</span> Nuevo caso';
-  if (newButton) newButton.onclick = actions[v] ? actions[v].run : openNewCase;
-  const fab = document.querySelector('.fab');
-  if (fab) {
-    fab.textContent = 'ï¼‹';
-    fab.setAttribute('aria-label', actions[v] ? actions[v].label.replace('ï¼‹ ', '') : 'Nuevo caso');
-    fab.onclick = actions[v] ? actions[v].run : openNewCase;
-  }
-  if (v === 'tareas') renderDailyTasks();
-  if (v === 'finanzas') renderFinanzas();
-}
-function setFilter(f, el) { state.kFilter=f; document.querySelectorAll('#view-kanban .filter-btn').forEach(b=>b.classList.remove('active')); el.classList.add('active'); renderKanban(); }
-function setCasosFilter(f, el) { state.cFilter=f; document.querySelectorAll('#view-casos .filter-btn').forEach(b=>b.classList.remove('active')); el.classList.add('active'); renderCases(); }
-function toggleCase(id) { const c = state.cases.find(x=>x.id===id); if(c){ c.open=!c.open; clearSelection(); renderCases(); } }
-
-function openModal(id) { document.getElementById(id).classList.add('open'); document.body.classList.add('modal-open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); if(!document.querySelector('.modal-overlay.open')) document.body.classList.remove('modal-open'); }
-document.addEventListener('keydown', e => { if(e.key==='Escape') { document.querySelectorAll('.modal-overlay.open').forEach(m=>m.classList.remove('open')); document.body.classList.remove('modal-open'); } });
-document.addEventListener('click', e => { if(e.target.classList.contains('modal-overlay')) { e.target.classList.remove('open'); if(!document.querySelector('.modal-overlay.open')) document.body.classList.remove('modal-open'); } });
-
-let toastT;
-function showToast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.classList.add('show');
-  clearTimeout(toastT);
-  toastT = setTimeout(() => t.classList.remove('show'), 2500);
-}
-
-// ==================== INICIAR ====================
-document.getElementById('bn-kanban').classList.add('active');
-loadState();
-renderAll();
-setupFirebaseListener();
-requestNotificationPermission();
+YªçŠx-®éÜj×¢ëiºÚ+Š§j[h‘éÜ¢éíÛùÑ:-jZ.¶›­–)Ş³RòòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒtÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¢†gVæ7F–öâ‚’°Ğ¢6öç7BÖæ–fW7BÒ°Ğ¢æÖS¢$Æ–væW$õ2"ÀĞ¢6†÷'EöæÖS¢$Æ–væW$õ2"ÀĞ¢7F'E÷W&Ã¢Æö6F–öâæ‡&VbÀĞ¢F—7Æ“¢'7FæFÆöæR"ÀĞ¢&6¶w&÷VæEö6öÆ÷#¢"6c†ff2"ÀĞ¢F†VÖUö6öÆ÷#¢"3#Sc6V""ÀĞ¢–6öç3¢·²7&3¢&FF¦–ÖvR÷7fr·†ÖÂÂS477fr†ÖÆç3Òv‡GG¢ò÷wwrçs2æ÷&ró#÷7frrf–Wt&÷ƒÒsS"S"rS4RS47öÇ–vöâö–çG3Òs#SbÃ3"CcBÃcCcBÃ3S"#SbÃCƒC‚Ã3S"C‚Ãcrf–ÆÃÒrS#3#Sc6V"ròS4RS47FW‡BƒÒs#Sbr“Òs3rFW‡BÖæ6†÷#ÒvÖ–FFÆRrföçBÖfÖ–Ç“Òt–çFW"Ç6ç2×6W&–brföçB×vV–v‡CÒv&öÆBrföçB×6—¦SÒsCrf–ÆÃÒwv†—FRrS4Tõ2S42÷FW‡BS4RS42÷7frS4R"Â6—¦W3¢#S'ƒS""ÂG—S¢&–ÖvR÷7fr·†ÖÂ"ÕĞĞ¢Ó°Ğ¢6öç7B&Æö"ÒæWr&Æö"…´¥4ôâç7G&–æv–g’†Öæ–fW7B•ÒÂ²G—S¢vÆ–6F–öâö§6öârÒ“°Ğ¢6öç7BÖæ–fW7EU$ÂÒU$Âæ7&VFTö&¦V7EU$Â†&Æö"“°Ğ¢6öç7BÆ–æ²ÒFö7VÖVçBæ7&VFTVÆVÖVçB‚vÆ–æ²r“°Ğ¢Æ–æ²ç&VÂÒvÖæ–fW7Bs°Ğ¢Æ–æ²æ‡&VbÒÖæ–fW7EU$Ã°Ğ¢Fö7VÖVçBæ†VBæVæD6†–ÆB†Æ–æ²“°Ğ¢–b‚w6W'f–6Uv÷&¶W"r–âæf–vF÷"’°Ğ¢æf–vF÷"ç6W'f–6Uv÷&¶W"ævWE&Vv—7G&F–öç2‚’çF†Vâ‡&Vw2Óâ&Vw2æf÷$V6‚‡"Óâ"çVç&Vv—7FW"‚’’“°Ğ¢ĞĞ§Ò’‚“°Ğ Ğ¢òòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒäõD”d”44”ôäU2U4‚ÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¦7–æ2gVæ7F–öâ&WVW7Dæ÷F–f–6F–öåW&Ö—76–öâ‚’°Ğ¢–b‚‚tæ÷F–f–6F–öâr–âv–æF÷r’’²6†÷uFö7B‚tW7FRæfVvF÷"æòFÖ—FRf—6÷2r“²&WGW&ã²ĞĞ¢6öç7BW&Ö—76–öâÒæ÷F–f–6F–öâçW&Ö—76–öâÓÓÒvw&çFVBròvw&çFVBr¢v—Bæ÷F–f–6F–öâç&WVW7EW&Ö—76–öâ‚“°Ğ¢WFFTæ÷F–f–6F–öä'WGFöâ‚“°Ğ¢–b‡W&Ö—76–öâÓÓÒvw&çFVBr’²6†÷uFö7B‚tf—6÷2FRVçG&Vv7F—fF÷2r“²6†V6µW&vVçDæ÷F–f–6F–öç2‚“²ĞĞ¢VÇ6R–b‡W&Ö—76–öâÓÓÒvFVæ–VBr’6†÷uFö7B‚tÆ÷2f—6÷2W7L:â&Æ÷VVF÷2VâVÂæfVvF÷"r“°Ğ§ĞĞ Ğ¦gVæ7F–öâWFFTæ÷F–f–6F–öä'WGFöâ‚’°Ğ¢6öç7B'WGFöâÒFö7VÖVçBævWDVÆVÖVçD'”–B‚væ÷F–f–6F–öä'Fâr“°Ğ¢–b‚'WGFöâ’&WGW&ã°Ğ¢6öç7BVæ&ÆVBÒtæ÷F–f–6F–öâr–âv–æF÷rbbæ÷F–f–6F–öâçW&Ö—76–öâÓÓÒvw&çFVBs°Ğ¢'WGFöâæ6Æ74Æ—7BçFövvÆR‚vVæ&ÆVBrÂVæ&ÆVB“°Ğ¢'WGFöâçFW‡D6öçFVçBÒ	ùIBs°Ğ¢'WGFöâçF—FÆRÒVæ&ÆVBòtf—6÷2FRVçG&Vv7F—fF÷2r¢t7F—f"f—6÷2FRVçG&Vvs°Ğ¢'WGFöâç6WDGG&–'WFR‚v&–ÖÆ&VÂrÂ'WGFöâçF—FÆR“°Ğ§ĞĞ§WFFTæ÷F–f–6F–öä'WGFöâ‚“°Ğ Ğ¦ÆWB&Wf–÷W6Ç”æ÷F–f–VBÒµÓ°Ğ§G'’²&Wf–÷W6Ç”æ÷F–f–VBÒ¥4ôâç'6R‡6W76–öå7F÷&vRævWD—FVÒ‚vÆ–væW%÷W&vVçEöæ÷F–f–6F–öç2r’ÇÂuµÒr“²Ò6F6‚†R’·ĞĞ¦6öç7BW&vVçDæ÷F–f–6F–öå6VçBÒæWr6WB„'&’æ—4'&’‡&Wf–÷W6Ç”æ÷F–f–VB’ò&Wf–÷W6Ç”æ÷F–f–VB¢µÒ“°Ğ¦gVæ7F–öâ&VÖVÖ&W%W&vVçDæ÷F–f–6F–öâ†¶W’’°Ğ¢W&vVçDæ÷F–f–6F–öå6VçBæFB†¶W’“°Ğ¢G'’²6W76–öå7F÷&vRç6WD—FVÒ‚vÆ–væW%÷W&vVçEöæ÷F–f–6F–öç2rÂ¥4ôâç7G&–æv–g’…²ââçW&vVçDæ÷F–f–6F–öå6VçEÒ’“²Ò6F6‚†R’·ĞĞ§ĞĞ¦gVæ7F–öâ6†V6µW&vVçDæ÷F–f–6F–öç2‚’°Ğ¢–b‚‚tæ÷F–f–6F–öâr–âv–æF÷r’ÇÂæ÷F–f–6F–öâçW&Ö—76–öâÓÒvw&çFVBr’&WGW&ã°Ğ¢6öç7Bæ÷rÒæWrFFR‚“²æ÷rç6WD†÷W'2ƒÃÃÃ“°Ğ¢7FFRæ66W2æf÷$V6‚†2Óâ°Ğ¢6öç7B&–òÒvWE&–ò†2æFVÆ—fW'’“°Ğ¢–b‡&–òÓÓÒwW&vVçFRrbb—466T6ö×ÆWFVÇ”f–æ—6†VB†2’’°Ğ¢6öç7BBÒF—5VçF–Â†2æFVÆ—fW'’“°Ğ¢–b†BÃÒ’°Ğ¢6öç7B¶W’ÒG¶2æ–GÓ¢G¶2æFVÆ—fW'—Ó§fVæ6–Fö°Ğ¢–b‚W&vVçDæ÷F–f–6F–öå6VçBæ†2†¶W’’’²æWræ÷F–f–6F–öâ†)ªdTä4”Dó¢G¶2çF–VçGÖÂ¶&öG“¢fV6†FRVçG&Vv6FÂ–6öã¢vFF¦–ÖvR÷7fr·†ÖÂÂS477fr†ÖÆç3Ò&‡GG¢ò÷wwrçs2æ÷&ró#÷7fr"f–Wt&÷ƒÒ#"S4RS466—&6ÆR7ƒÒ#S"7“Ò#S"#Ò#CR"f–ÆÃÒ"S#6F3#c#b"òS4RS42÷7frS4RwÒ“²&VÖVÖ&W%W&vVçDæ÷F–f–6F–öâ†¶W’“²ĞĞ¢ÒVÇ6R–b†BÓÓÒ’°Ğ¢6öç7B¶W’ÒG¶2æ–GÓ¢G¶2æFVÆ—fW'—Ó¦Ö;æ°Ğ¢–b‚W&vVçDæ÷F–f–6F–öå6VçBæ†2†¶W’’’²æWræ÷F–f–6F–öâ†	ùKBÔ9ä¢G¶2çF–VçGÖÂ¶&öG“¢VVFL:Ö&ÆVçG&VvÂ–6öã¢vFF¦–ÖvR÷7fr·†ÖÂÂS477fr†ÖÆç3Ò&‡GG¢ò÷wwrçs2æ÷&ró#÷7fr"f–Wt&÷ƒÒ#"S4RS466—&6ÆR7ƒÒ#S"7“Ò#S"#Ò#CR"f–ÆÃÒ"S#6c“s3b"òS4RS42÷7frS4RwÒ“²&VÖVÖ&W%W&vVçDæ÷F–f–6F–öâ†¶W’“²ĞĞ¢ĞĞ¢ĞĞ¢Ò“°Ğ§ĞĞ§6WD–çFW'fÂ†6†V6µW&vVçDæ÷F–f–6F–öç2Â3c“°Ğ Ğ¢òòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒd$”$ÄU2tÄô$ÄU2ÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¦ÆWB&W7G‚ÒçVÆÂÂVF—F–æt66T–BÒçVÆÂÂVF—F–æu7Fö6´–BÒçVÆÃ°Ğ¦ÆWB6VÆV7F–öâÒ²66T–C¦çVÆÂÂ&5G—S¦çVÆÂÂ–æF–6W3¦æWr6WB‚’Ó°Ğ¦ÆWBVF—F–ætf–æç¦–BÒçVÆÃ°Ğ¦ÆWBvôf–æç¦–BÒçVÆÃ°Ğ¦ÆWBÖöFôVw&W6òÒfÇ6S°Ğ¦ÆWB7FÄf–ÆW2ÒµÓ°Ğ¦ÆWBFdf–ÆW2ÒµÓ°Ğ¦6öç7BVæFõ7F6²ÒµÓ°Ğ¦6öç7B7F—f—G”ÆörÒµÓ°Ğ Ğ¢òòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒeTä4”ôäU2U„”Ä”$U2ÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¦gVæ7F–öâF—4g&öÔæ÷r†B—²6öç7BGCÖæWrFFR‚“²GBç6WDFFR†GBævWDFFR‚’¶B“²&WGW&âGBçFô•4õ7G&–ær‚’ç6Æ–6RƒÃ“²ĞĞ¦gVæ7F–öâÖ¶T&2‡B—²&WGW&âBò²F÷FÃ§BÂÆ–å7FFW3¦æWr'&’‡B’æf–ÆÂ‚Ó’Ò¢çVÆÃ²ĞĞ¦gVæ7F–öâÖ¶T66R‡F–VçBÆFö7F÷"ÆFö7F÷$–BÇ7WÆ–æbÆFVÆ—fW'’Æ–æw&W6òÆVw&W6òÆö'2—°Ğ¢&WGW&â²–C§V–B‚’ÂF–VçBÂFö7F÷"ÂFö7F÷$–C¦Fö7F÷$–GÇÂrrÂFVÆ—fW'’ÂÖöçFõF÷FÃ¢'6TfÆöB†–æw&W6ò’ÇÂÂVw&W6ó¢'6TfÆöB†Vw&W6ò’ÇÂÂö'2Â&6F3§·7W¦Ö¶T&2‡7W’Â–æc¦Ö¶T&2†–æb—ÒÂ÷Vã¦fÇ6RÓ°Ğ§ĞĞ¦gVæ7F–öâvWE&–ò†B—²6öç7BCÖæWrFFR‚“²Bç6WD†÷W'2ƒÃÃÃ“²6öç7BF–fcÔÖF‚æ6V–Â‚†æWrFFR†B²uC££r’×B’óƒcC“²&WGW&âF–fcÃÓ#òwW&vVçFRs¦F–fcÃÓSòw&÷†–Öòs¢vö²s²ĞĞ¦gVæ7F–öâF—5VçF–Â†B—²6öç7BCÖæWrFFR‚“²Bç6WD†÷W'2ƒÃÃÃ“²&WGW&âÖF‚æ6V–Â‚†æWrFFR†B²uC££r’×B’óƒcC“²ĞĞ¦gVæ7F–öâf÷&ÖE&ævW2†–æF–6W2—°Ğ¢–b‚–æF–6W2æÆVæwF‚’&WGW&ârs°Ğ¢6öç7B6÷'FVCÕ²ââæ–æF–6W5Òç6÷'B‚†Æ"“ÓæÖ"“°Ğ¢6öç7B'G3ÕµÓ²ÆWB7F'C×6÷'FVE³ÒÂVæC×6÷'FVE³Ó°Ğ¢f÷"†ÆWB“Ó¶“Ç6÷'FVBæÆVæwFƒ¶’²²—°Ğ¢–b‡6÷'FVE¶•ÓÓÓÖVæB³—²VæC×6÷'FVE¶•Ó²ĞĞ¢VÇ6W²'G2çW6‚‡7F'CÓÓÖVæCöG·7F'GÖ¦G·7F'GÒÒG¶VæGÖ“²7F'C×6÷'FVE¶•Ó²VæC×6÷'FVE¶•Ó²ĞĞ¢ĞĞ¢'G2çW6‚‡7F'CÓÓÖVæCöG·7F'GÖ¦G·7F'GÒÒG¶VæGÖ“°Ğ¢&WGW&â'G2æ¦ö–â‚rÂr“°Ğ§ĞĞ¦gVæ7F–öâ—466T6ö×ÆWFVÇ”f–æ—6†VB†2’°Ğ¢&WGW&â²w7WrÂv–æbuÒæWfW'’†BÓâ°Ğ¢6öç7B&2Ò2æ&6F5¶EÓ°Ğ¢–b‚&2’&WGW&âG'VS°Ğ¢&WGW&â&2æÆ–å7FFW2æWfW'’‡7BÓâ7BÓÓÒd”äÅõ5DtRÇÂ7BÓÓÒÓ“°Ğ¢Ò“°Ğ§ĞĞ Ğ¢òòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒtU5Dœ94âDR5Dô4²DRÄä4„2ÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¦gVæ7F–öâvWEÆæ6†7Fö6²‚’°Ğ¢ÆWBÆæ6†Ò7FFRç7Fö6²æf–æB‡2Óâ2ææÖRçFôÆ÷vW$66R‚’æ–æ6ÇVFW2‚wÆæ6†2ãsRr’“°Ğ¢–b‚Ææ6†’°Ğ¢Ææ6†Ò²–C¢V–B‚’ÂæÖS¢uÆæ6†2ãsVÖÒrÂG—S¢uÆæ6†2rÂG“¢ÂÖ–ã¢3ÂVæ—C¢vÌ:Ö–æ2rÂÖƒ¢#Ó°Ğ¢7FFRç7Fö6²çW6‚‡Ææ6†“°Ğ¢ĞĞ¢&WGW&âÆæ6†°Ğ§ĞĞ Ğ¦gVæ7F–öâF§W7E7Fö6´öå7FvT6†ævR†&2Â–G‚ÂöÆE7FvRÂæWu7FvR’°Ğ¢–b†öÆE7FvRÓÓÒæWu7FvR’&WGW&ã°Ğ¢–b†æWu7FvRÓÓÒ"bböÆE7FvRÓÒ"’°Ğ¢6öç7BÆæ6†ÒvWEÆæ6†7Fö6²‚“°Ğ¢Ææ6†çG’ÒÖF‚æÖ‚ƒÂÆæ6†çG’Ò“°Ğ¢ÒVÇ6R–b†öÆE7FvRÓÓÒ"bbæWu7FvRÓÒ"’°Ğ¢6öç7BÆæ6†ÒvWEÆæ6†7Fö6²‚“°Ğ¢Ææ6†çG’³Ò°Ğ¢ĞĞ§ĞĞ Ğ¢òòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒU5DDòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¦6öç7B7FFRÒ°Ğ¢66W3¢µÒÂ7Fö6³¢µÒÂf–æç¦3¢µÒÂÆ7DÖöF–f–VC¢ÀĞ¢´f–ÇFW#¢vÆÂrÂ4f–ÇFW#¢vÆÂrÀĞ¢F–VçDf–ÇFW#¢rrÂFö7F÷$f–ÇFW#¢rrÂFö7F÷$¶æ&äf–ÇFW#¢rrÀĞ¢f–æç¦4w&÷W¢fÇ6PĞ§Ó°Ğ Ğ¢òòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒ”ÄDRDU4„4U"ÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¦gVæ7F–öâW6…VæFò‚’°Ğ¢6öç7B6æ6†÷BÒ¥4ôâç'6R„¥4ôâç7G&–æv–g’‡²66W3¢7FFRæ66W2Â7Fö6³¢7FFRç7Fö6²Ò’“°Ğ¢VæFõ7F6²çW6‚‡6æ6†÷B“°Ğ¢–b‡VæFõ7F6²æÆVæwF‚âÔ…õTäDò’VæFõ7F6²ç6†–gB‚“°Ğ¢WFFUVæFô'WGFöâ‚“°Ğ§ĞĞ Ğ¦gVæ7F–öâVæFò‚’°Ğ¢–b‡VæFõ7F6²æÆVæwF‚ÓÓÒ’&WGW&ã°Ğ¢6öç7B&WbÒVæFõ7F6²ç÷‚“°Ğ¢7FFRæ66W2Ò&Wbæ66W3°Ğ¢7FFRç7Fö6²Ò&Wbç7Fö6³°Ğ¢6ÆV%6VÆV7F–öâ‚“°Ğ¢&VæFW$ÆÂ‚“°Ğ¢FD7F—f—G’‚~(ú¢FW6†6W";¦ÇF–Öò6Ö&–òr“°Ğ¢6†÷uFö7B‚t6Ö&–òFW6†V6†òr“°Ğ¢WFFUVæFô'WGFöâ‚“°Ğ§ĞĞ Ğ¦gVæ7F–öâWFFUVæFô'WGFöâ‚’°Ğ¢6öç7B'FâÒFö7VÖVçBævWDVÆVÖVçD'”–B‚v'FåVæFòr“°Ğ¢'FâæF—6&ÆVBÒVæFõ7F6²æÆVæwF‚ÓÓÒ°Ğ¢'FâçFW‡D6öçFVçBÒ(j’FW6†6W"G·VæFõ7F6²æÆVæwF‚ò‚G·VæFõ7F6²æÆVæwF‡Ò–¢rwÖ°Ğ§ĞĞ¦Fö7VÖVçBæFDWfVçDÆ—7FVæW"‚v¶W–F÷vârÂRÓâ°Ğ¢–b†Ræ7G&Ä¶W’bbRæ¶W’ÓÓÒw¢r’²Rç&WfVçDFVfVÇB‚“²VæFò‚“²ĞĞ§Ò“°Ğ Ğ¢òòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒ$Tt•5E$òDR5D•d”DBÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¦gVæ7F–öâFD7F—f—G’†FW67&—F–öâ’°Ğ¢6öç7Bæ÷rÒæWrFFR‚“°Ğ¢6öç7BF–ÖRÒæ÷rçFôÆö6ÆUF–ÖU7G&–ær‚vW2ÔU2rÂ²†÷W#¢s"ÖF–v—BrÂÖ–çWFS¢s"ÖF–v—BrÒ“°Ğ¢7F—f—G”ÆörçVç6†–gB‡²F–ÖRÂFW63¢FW67&—F–öâÒ“°Ğ¢–b†7F—f—G”ÆöræÆVæwF‚âÔ…ô5D•d•E’’7F—f—G”Æörç÷‚“°Ğ¢WFFT7F—f—G”&FvR‚“°Ğ§ĞĞ Ğ¦gVæ7F–öâWFFT7F—f—G”&FvR‚’°Ğ¢6öç7B&FvRÒFö7VÖVçBævWDVÆVÖVçD'”–B‚v7F—f—G”&FvRr“°Ğ¢6öç7B6÷VçBÒ7F—f—G”ÆöræÆVæwFƒ°Ğ¢–b†6÷VçBâ’°Ğ¢&FvRç7G–ÆRæF—7Æ’ÒvfÆW‚s°Ğ¢&FvRçFW‡D6öçFVçBÒÖF‚æÖ–â†6÷VçBÂ“’“°Ğ¢ÒVÇ6R°Ğ¢&FvRç7G–ÆRæF—7Æ’ÒvæöæRs°Ğ¢ĞĞ§ĞĞ Ğ¦gVæ7F–öâ÷Vä7F—f—G”ÖöFÂ‚’°Ğ¢6öç7B6öçFVçBÒFö7VÖVçBævWDVÆVÖVçD'”–B‚v7F—f—G”6öçFVçBr“°Ğ¢6öçFVçBæ–ææW$…DÔÂÒ7F—f—G”ÆöræÆVæwF‚ò7F—f—G”ÆöræÖ†ÓàĞ¢ÆF—b6Æ73Ò&7F—f—G’Ö—FVÒ#ãÇ7â6Æ73Ò&7F—f—G’×F–ÖR#âG¶çF–ÖWÓÂ÷7ããÇ7â6Æ73Ò&7F—f—G’ÖFW62#âG¶æFW67ÓÂ÷7ããÂöF—cæ Ğ¢’æ¦ö–â‚rr’¢sÆF—b7G–ÆSÒ'FF–æs£#ƒ·FW‡BÖÆ–vã¦6VçFW#¶6öÆ÷#§f"‚Ò×FW‡C2’#å6–â7F—f–FB&Vv—7G&FÂöF—câs°Ğ¢÷VäÖöFÂ‚v7F—f—G”ÖöFÂr“°Ğ§ĞĞ Ğ¦gVæ7F–öâ6ÆV$7F—f—G’‚’°Ğ¢–b†6öæf—&Ò‚|+ôÆ–×–"FöFòVÂ†—7F÷&–ÂFR7F—f–FCòr’’°Ğ¢7F—f—G”ÆöræÆVæwF‚Ò°Ğ¢WFFT7F—f—G”&FvR‚“°Ğ¢6Æ÷6TÖöFÂ‚v7F—f—G”ÖöFÂr“°Ğ¢6†÷uFö7B‚t†—7F÷&–ÂÆ–×–Fòr“°Ğ¢ĞĞ§ĞĞ Ğ¢òòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒU%4•5DTä4”ÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¦gVæ7F–öâÆöE7FFR‚—°Ğ¢G'’°Ğ¢6öç7B&rÒÆö6Å7F÷&vRævWD—FVÒ„Å5ô´U’“°Ğ¢–b‡&r’°Ğ¢6öç7BFFÒ¥4ôâç'6R‡&r“°Ğ¢–b†FFæ66W2bbFFç7Fö6²’°Ğ¢7FFRæ66W2ÒFFæ66W3°Ğ¢7FFRç7Fö6²ÒFFç7Fö6³°Ğ¢7FFRæf–æç¦2ÒFFæf–æç¦2ÇÂµÓ°Ğ¢7FFRæÆ7DÖöF–f–VBÒFFæÆ7DÖöF–f–VBÇÂ°Ğ¢&WGW&ã°Ğ¢ĞĞ¢ĞĞ¢Ò6F6‚†R’·ĞĞ¢7FFRæ66W2Ò'V–ÆD66W4g&öÔ55b†77e&r“°Ğ¢7FFRç7Fö6²Ò°Ğ¢¶–C§V–B‚’ÆæÖS¢uÆæ6†2ãsVÖÒrÇG—S¢uÆæ6†2rÇG“£ÆÖ–ã£3ÇVæ—C¢vÌ:Ö–æ2rÆÖƒ£#ÒÀĞ¢¶–C§V–B‚’ÆæÖS¢uÆæ6†2ãÖÒrÇG—S¢uÆæ6†2rÇG“£"ÆÖ–ã£#ÇVæ—C¢vÌ:Ö–æ2rÆÖƒ£ÒÀĞ¢¶–C§V–B‚’ÆæÖS¢u&W6–æUbrÇG—S¢u&W6–ærÇG“£2ÆÖ–ã£"ÇVæ—C¢v¶rrÆÖƒ£ÒÀĞ¢¶–C§V–B‚’ÆæÖS¢t&öÇ62rÇG—S¢u6¶v–ærrÇG“£ƒÆÖ–ã£SÇVæ—C¢wVæ–BrÆÖƒ£SÒÀĞ¢Ó°Ğ¢7FFRæÆ7DÖöF–f–VBÒFFRææ÷r‚“°Ğ¢6fU7FFR‚“°Ğ§ĞĞ Ğ¦gVæ7F–öâ6fU7FFR‚—°Ğ¢G'’°Ğ¢6öç7BFFÒ²66W3¢7FFRæ66W2Â7Fö6³¢7FFRç7Fö6²Âf–æç¦3¢7FFRæf–æç¦2ÂÆ7DÖöF–f–VC¢7FFRæÆ7DÖöF–f–VBÓ°Ğ¢Æö6Å7F÷&vRç6WD—FVÒ„Å5ô´U’Â¥4ôâç7G&–æv–g’†FF’“°Ğ¢–b†F"bb—4öæÆ–æRbbw&—FTÆö6²’°Ğ¢w&—FTÆö6²ÒG'VS°Ğ¢6öç7B&ö÷E&VbÒF"ç&Vb‚ròr“°Ğ¢&ö÷E&VbçG&ç67F–öâ†7W'&VçDFFÓâ°Ğ¢–b†7W'&VçDFFbb7W'&VçDFFæÆ7DÖöF–f–VBâ7FFRæÆ7DÖöF–f–VB’&WGW&ã°Ğ¢&WGW&â²ââæFFÂÆ7DÖöF–f–VC¢FFRææ÷r‚’Ó°Ğ¢ÒÂ†W'&÷"Â6öÖÖ—GFVBÂ6æ6†÷B’Óâ°Ğ¢w&—FTÆö6²ÒfÇ6S°Ğ¢–b†W'&÷"’°Ğ¢6öç6öÆRæW'&÷"‚uG&ç666œ;6âfÆÆ–F¢rÂW'&÷"“°Ğ¢6†÷uFö7B‚tW'&÷"FR6–æ7&öæ—¦6œ;6âr“°Ğ¢ÒVÇ6R–b‚6öÖÖ—GFVB’°Ğ¢F"ç&Vb‚ròr’æöæ6R‚wfÇVRr’çF†Vâ‡6æÓâ°Ğ¢6öç7B&VÖ÷FRÒ6æçfÂ‚“°Ğ¢–b‡&VÖ÷FRbb&VÖ÷FRæ66W2bb&VÖ÷FRç7Fö6²’°Ğ¢7FFRæ66W2Ò&VÖ÷FRæ66W3°Ğ¢7FFRç7Fö6²Ò&VÖ÷FRç7Fö6³°Ğ¢7FFRæÆ7DÖöF–f–VBÒ&VÖ÷FRæÆ7DÖöF–f–VBÇÂFFRææ÷r‚“°Ğ¢&VæFW$ÆÂ‚“°Ğ¢6†÷uFö7B‚tFF÷27GVÆ—¦F÷2FW6FR÷G&òF—7÷6—F—fòr“°Ğ¢ĞĞ¢Ò“°Ğ¢ÒVÇ6R°Ğ¢7FFRæÆ7DÖöF–f–VBÒ6æ6†÷BçfÂ‚’æÆ7DÖöF–f–VC°Ğ¢ĞĞ¢Ò“°Ğ¢ĞĞ¢Ò6F6‚†R’²6öç6öÆRæW'&÷"‚tW'&÷"ÂwV&F"rÂR“²ĞĞ§ĞĞ Ğ¦gVæ7F–öâ6WGWf—&V&6TÆ—7FVæW"‚’°Ğ¢–b‚F"’&WGW&ã°Ğ¢F"ç&Vb‚ròr’æöâ‚wfÇVRrÂ6æÓâ°Ğ¢–b‡w&—FTÆö6²’&WGW&ã°Ğ¢6öç7B&VÖ÷FRÒ6æçfÂ‚“°Ğ¢–b‡&VÖ÷FRbb&VÖ÷FRæ66W2bb&VÖ÷FRç7Fö6²bb‚7FFRæÆ7DÖöF–f–VBÇÂ&VÖ÷FRæÆ7DÖöF–f–VBãÒ7FFRæÆ7DÖöF–f–VB’’°Ğ¢7FFRæ66W2Ò&VÖ÷FRæ66W3°Ğ¢7FFRç7Fö6²Ò&VÖ÷FRç7Fö6³°Ğ¢7FFRæÆ7DÖöF–f–VBÒ&VÖ÷FRæÆ7DÖöF–f–VBÇÂFFRææ÷r‚“°Ğ¢6ÆV%6VÆV7F–öâ‚“°Ğ¢&VæFW$ÆÂ‚“°Ğ¢WFFU7–æ57FGW2‡G'VR“°Ğ¢ĞĞ¢Ò“°Ğ¢F"ç&Vb‚ræ–æfòö6öææV7FVBr’æöâ‚wfÇVRrÂ6æÓâ°Ğ¢—4öæÆ–æRÒ6æçfÂ‚’ÓÓÒG'VS°Ğ¢WFFU7–æ57FGW2†—4öæÆ–æR“°Ğ¢Ò“°Ğ§ĞĞ Ğ¦gVæ7F–öâ7–æ4g&öÔf—&V&6R‚’°Ğ¢–b†F"bb—4öæÆ–æR’°Ğ¢F"ç&Vb‚ròr’æöæ6R‚wfÇVRr’çF†Vâ‡6æÓâ°Ğ¢6öç7B&VÖ÷FRÒ6æçfÂ‚“°Ğ¢–b‡&VÖ÷FRbb&VÖ÷FRæ66W2bb&VÖ÷FRç7Fö6²’°Ğ¢7FFRæ66W2Ò&VÖ÷FRæ66W3°Ğ¢7FFRç7Fö6²Ò&VÖ÷FRç7Fö6³°Ğ¢7FFRæÆ7DÖöF–f–VBÒ&VÖ÷FRæÆ7DÖöF–f–VBÇÂFFRææ÷r‚“°Ğ¢6ÆV%6VÆV7F–öâ‚“°Ğ¢&VæFW$ÆÂ‚“°Ğ¢6fU7FFR‚“°Ğ¢6†÷uFö7B‚u6–æ7&öæ—¦FòÖçVÆÖVçFRr“°Ğ¢WFFU7–æ57FGW2‡G'VR“°Ğ¢ĞĞ¢Ò’æ6F6‚‚‚’Óâ6†÷uFö7B‚tW'&÷"Â6–æ7&öæ—¦"r’“°Ğ¢ĞĞ§ĞĞ Ğ¦gVæ7F–öâWFFU7–æ57FGW2†öæÆ–æR’°Ğ¢6öç7BF÷BÒFö7VÖVçBævWDVÆVÖVçD'”–B‚w7–æ4F÷Br“°Ğ¢6öç7BG‡BÒFö7VÖVçBævWDVÆVÖVçD'”–B‚w7–æ5FW‡Br“°Ğ¢–b†öæÆ–æR’²F÷Bæ6Æ74æÖRÒw7–æ2ÖF÷Bs²G‡BçFW‡D6öçFVçBÒu6–æ7&öæ—¦Fòs²ĞĞ¢VÇ6R²F÷Bæ6Æ74æÖRÒw7–æ2ÖF÷BöffÆ–æRs²G‡BçFW‡D6öçFVçBÒtöffÆ–æRs²ĞĞ§ĞĞ Ğ¢òòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒD”TÕòU5D”ÔDòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¦gVæ7F–öâ6Æ7VÆFTW7F–ÖFVEF–ÖR‚’°Ğ¢6öç7BF–ÖUW%7FvRÒ³SórÂRÂÂÓ°Ğ¢ÆWBF÷FÄÖ–âÒ°Ğ¢7FFRæ66W2æf÷$V6‚†2Óâ°Ğ¢²w7WrÂv–æbuÒæf÷$V6‚†BÓâ°Ğ¢6öç7B&2Ò2æ&6F5¶EÓ°Ğ¢–b‚&2’&WGW&ã°Ğ¢&2æÆ–å7FFW2æf÷$V6‚‡7BÓâ²–b‡7BãÒbb7BÂd”äÅõ5DtR’F÷FÄÖ–â³ÒF–ÖUW%7FvU·7EÒÇÂ²Ò“°Ğ¢Ò“°Ğ¢Ò“°Ğ¢6öç7B†÷W'2ÒÖF‚æfÆö÷"‡F÷FÄÖ–âòc“°Ğ¢6öç7BÖ–ç2ÒÖF‚ç&÷VæB‡F÷FÄÖ–âRc“°Ğ¢&WGW&â²F÷FÄÖ–âÂ†÷W'2ÂÖ–ç2Ó°Ğ§ĞĞ Ğ¢òòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒ$TäDU$•¤Dõ2ÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¦gVæ7F–öâ&VæFW$ÆÂ‚’°Ğ¢&VæFW%7FG2‚“°Ğ¢&VæFW%&öw&W74&"‚“°Ğ¢&VæFW$ÆW'G2‚“°Ğ¢&VæFW$¶æ&â‚“°Ğ¢&VæFW$66W2‚“°Ğ¢&VæFW%7Fö6²‚“°Ğ¢6fU7FFR‚“°Ğ¢&VæFW$f–æç¦2‚“°Ğ§ĞĞ¦6öç7B&VæFW"Ò&VæFW$ÆÃ°Ğ Ğ¦gVæ7F–öâ6÷VçD'•7FvR‚’°Ğ¢6öç7B6çBÒ³£Ã£Ã#£Ã3£Ó°Ğ¢7FFRæ66W2æf÷$V6‚†2Óâ²w7WrÂv–æbuÒæf÷$V6‚†BÓâ°Ğ¢6öç7BÒ2æ&6F5¶EÓ²–b‚’&WGW&ã°Ğ¢æÆ–å7FFW2æf÷$V6‚‡7BÓâ²–b‡7CãÓbb7CÃB’6çE·7EÒ²³²Ò“°Ğ¢Ò’“°Ğ¢&WGW&â6çC°Ğ§ĞĞ Ğ¦gVæ7F–öâ&VæFW%&öw&W74&"‚’°Ğ¢ÆWBF÷FÄÆ–âÒÂf–æ—6†VDÆ–âÒ°Ğ¢7FFRæ66W2æf÷$V6‚†2Óâ°Ğ¢²w7WrÂv–æbuÒæf÷$V6‚†BÓâ°Ğ¢6öç7B&2Ò2æ&6F5¶EÓ°Ğ¢–b‚&2’&WGW&ã°Ğ¢F÷FÄÆ–â³Ò&2çF÷FÃ°Ğ¢f–æ—6†VDÆ–â³Ò&2æÆ–å7FFW2æf–ÇFW"‡7BÓâ7BÓÓÒd”äÅõ5DtR’æÆVæwFƒ°Ğ¢Ò“°Ğ¢Ò“°Ğ¢6öç7B7BÒF÷FÄÆ–âòÖF‚ç&÷VæB‚†f–æ—6†VDÆ–âòF÷FÄÆ–â’¢’¢°Ğ¢6öç7BF–ÖRÒ6Æ7VÆFTW7F–ÖFVEF–ÖR‚“°Ğ¢ÆWBF–ÖU7G"Òrs°Ğ¢–b‡F–ÖRæ†÷W'2â’F–ÖU7G"³ÒG·F–ÖRæ†÷W'7Ö‚°Ğ¢F–ÖU7G"³ÒG·F–ÖRæÖ–ç7ÖÖ–æ°Ğ Ğ¢Fö7VÖVçBævWDVÆVÖVçD'”–B‚w&öw&W74&$6öçF–æW"r’æ–ææW$…DÔÂÒ Ğ¢ÆF—b6Æ73Ò'&öw&W72Ö&"ÖÆ&VÂ#àĞ¢Ç7ãå&öw&W6òvVæW&ÃÂ÷7ãàĞ¢Ç7ãâG¶f–æ—6†VDÆ–çÒòG·F÷FÄÆ–çÒÆ–æVF÷&W2‚G·7GÒR“Â÷7ãàĞ¢ÂöF—càĞ¢ÆF—b6Æ73Ò'&öw&W72Ö&"Ö&r#ãÆF—b6Æ73Ò'&öw&W72Ö&"Öf–ÆÂ"7G–ÆSÒ'v–GFƒ¢G·7GÒR#ãÂöF—cãÂöF—càĞ¢ÆF—b6Æ73Ò'F–ÖRÖW7F–ÖFR#î(ûF–V×òW7F–ÖFòFRG&&¦ó¢Ç7G&öæsâG·F–ÖU7G'ÓÂ÷7G&öæsãÂöF—càĞ¢°Ğ§ĞĞ Ğ¦gVæ7F–öâ&VæFW%7FG2‚’°Ğ¢6öç7BW&rÒ7FFRæ66W2æf–ÇFW"†2ÓâvWE&–ò†2æFVÆ—fW'’“ÓÓÒwW&vVçFRrbb—466T6ö×ÆWFVÇ”f–æ—6†VB†2’’æÆVæwFƒ°Ğ¢6öç7B&÷‚Ò7FFRæ66W2æf–ÇFW"†2ÓâvWE&–ò†2æFVÆ—fW'’“ÓÓÒw&÷†–Öòrbb—466T6ö×ÆWFVÇ”f–æ—6†VB†2’’æÆVæwFƒ°Ğ¢6öç7B6çBÒ6÷VçD'•7FvR‚“°Ğ¢Fö7VÖVçBævWDVÆVÖVçD'”–B‚w7FG4w&–Br’æ–ææW$…DÔÂÒ Ğ¢ÆF—b6Æ73Ò'7FBÖ6&B&–÷&—G’Ö6&B#ãÇ7â6Æ73Ò'7FB×7–Ö&öÂ#âÂ÷7ããÆF—b6Æ73Ò'7FBÖÆ&VÂ#å&WV–W&VâFVæ6œ;6ãÂöF—cãÆF—b6Æ73Ò'7FB×fÇVRG·W&sãòwW&vVçBs¢rwÒ#âG·W&wÓÂöF—cãÆF—b6Æ73Ò'7FBÖfö÷B#åfVæ6VâVâC‚‚ò–fVæ6–F÷3ÂöF—cãÂöF—càĞ¢ÆF—b6Æ73Ò'7FBÖ6&B#ãÇ7â6Æ73Ò'7FB×7–Ö&öÂ#î){sÂ÷7ããÆF—b6Æ73Ò'7FBÖÆ&VÂ#å,;7†–Ö2VçG&Vv3ÂöF—cãÆF—b6Æ73Ò'7FB×fÇVRG·&÷ƒãòwv&æ–ærs¢rwÒ#âG·&÷‡ÓÂöF—cãÆF—b6Æ73Ò'7FBÖfö÷B#äFVçG&òFRÆ÷2,;7†–Ö÷2RL:Ö3ÂöF—cãÂöF—càĞ¢ÆF—b6Æ73Ò'7FBÖ6&B#ãÇ7â6Æ73Ò'7FB×7–Ö&öÂ#î)z³Â÷7ããÆF—b6Æ73Ò'7FBÖÆ&VÂ#ä66÷27F—f÷3ÂöF—cãÆF—b6Æ73Ò'7FB×fÇVR#âG·7FFRæ66W2æÆVæwF‡ÓÂöF—cãÆF—b6Æ73Ò'7FBÖfö÷B#åG&&¦÷2VâVÂÆ&÷&F÷&–óÂöF—cãÂöF—càĞ¢ÆF—b6Æ73Ò'7FBÖ6&B7FvR×7FB#ãÇ7â6Æ73Ò'7FB×7–Ö&öÂ#ãÂ÷7ããÆF—b6Æ73Ò'7FBÖÆ&VÂ#å&–×&–Ö—#ÂöF—cãÆF—b6Æ73Ò'7FB×fÇVR"7G–ÆSÒ&6öÆ÷#§f"‚Ò×7’#âG¶6çE³×ÓÂöF—cãÆF—b6Æ73Ò'7FBÖfö÷B#äÆ–æVF÷&W2VæF–VçFW3ÂöF—cãÂöF—càĞ¢ÆF—b6Æ73Ò'7FBÖ6&B7FvR×7FB#ãÇ7â6Æ73Ò'7FB×7–Ö&öÂ#ã#Â÷7ããÆF—b6Æ73Ò'7FBÖÆ&VÂ#åFW&Ööf÷&ÖFóÂöF—cãÆF—b6Æ73Ò'7FB×fÇVR"7G–ÆSÒ&6öÆ÷#§f"‚Ò×7B’#âG¶6çE³×ÓÂöF—cãÆF—b6Æ73Ò'7FBÖfö÷B#äÆ–æVF÷&W2VæF–VçFW3ÂöF—cãÂöF—càĞ¢ÆF—b6Æ73Ò'7FBÖ6&B7FvR×7FB#ãÇ7â6Æ73Ò'7FB×7–Ö&öÂ#ã3Â÷7ããÆF—b6Æ73Ò'7FBÖÆ&VÂ#ä6÷'FR’VÆ–FóÂöF—cãÆF—b6Æ73Ò'7FB×fÇVR"7G–ÆSÒ&6öÆ÷#§f"‚Ò×62’#âG¶6çE³%×ÓÂöF—cãÆF—b6Æ73Ò'7FBÖfö÷B#äÆ–æVF÷&W2VæF–VçFW3ÂöF—cãÂöF—càĞ¢ÆF—b6Æ73Ò'7FBÖ6&B7FvR×7FB#ãÇ7â6Æ73Ò'7FB×7–Ö&öÂ#ãCÂ÷7ããÆF—b6Æ73Ò'7FBÖÆ&VÂ#äÆ—7F÷3ÂöF—cãÆF—b6Æ73Ò'7FB×fÇVR"7G–ÆSÒ&6öÆ÷#§f"‚Ò×6Vçb’#âG¶6çE³5×ÓÂöF—cãÆF—b6Æ73Ò'7FBÖfö÷B#å&VçG&Vvò6–W'&SÂöF—cãÂöF—cæ°Ğ¢6öç7BFöF”Æ&VÂÒæWr–çFÂäFFUF–ÖTf÷&ÖB‚vW2Ô"rÂ²vVV¶F“¢vÆöærrÂF“¢vçVÖW&–2rÂÖöçFƒ¢vÆöærrÒ’æf÷&ÖB†æWrFFR‚’“°Ğ¢6öç7BFFTVÂÒFö7VÖVçBævWDVÆVÖVçD'”–B‚w&öGV7F–öäFFRr“°Ğ¢–b†FFTVÂ’FFTVÂçFW‡D6öçFVçBÒäTÂDTÂDÄÄU"+rG·FöF”Æ&VÂçFôÆö6ÆUWW$66R‚vW2Ô"r—Ö°Ğ§ĞĞ Ğ¦gVæ7F–öâ&VæFW$ÆW'G2‚’°Ğ¢6öç7BÒµÓ°Ğ¢7FFRæ66W2æf÷$V6‚†2Óâ°Ğ¢6öç7B&–òÒvWE&–ò†2æFVÆ—fW'’“°Ğ¢–b‚—466T6ö×ÆWFVÇ”f–æ—6†VB†2’’°Ğ¢6öç7BBÒF—5VçF–Â†2æFVÆ—fW'’“°Ğ¢–b†BÃÒ’çW6‚‡·C¢v7&—F–6ÂrÂÓ¦)ŠdTä4”Dó¢G¶2çF–VçBç7Æ—B‚rÂr•³×ÖÒ“°Ğ¢VÇ6R–b†BÓÓÒ’çW6‚‡·C¢w&VBrÂÓ¦	ùKBÔ9ä¢G¶2çF–VçBç7Æ—B‚rÂr•³×ÖÒ“°Ğ¢VÇ6R–b†BÓÓÒ"’çW6‚‡·C¢v÷&ævRrÂÓ¦	ùú"L:Ö3¢G¶2çF–VçBç7Æ—B‚rÂr•³×ÖÒ“°Ğ¢VÇ6R–b‡&–òÓÓÒw&÷†–Öòr’çW6‚‡·C¢w–VÆÆ÷rrÂÓ¦	ùúG¶GÒL:Ö3¢G¶2çF–VçBç7Æ—B‚rÂr•³×ÖÒ“°Ğ¢ĞĞ¢Ò“°Ğ¢7FFRç7Fö6²æf÷$V6‚‡2Óâ²–b‡2çG“Ã×2æÖ–â’çW6‚‡·C¢w–VÆÆ÷rrÂÓ¦*ÊG·2ææÖWÒ‚G·2çG—ÒG·2çVæ—GÒ–Ò“²Ò“°Ğ¢–b‚æÆVæwF‚’çW6‚‡·C¢vw&VVârÂÓ¢uFöFòVâ÷&FVââæò†’VçG&Vv2W&vVçFW2æ’ÖFW&–ÆW2÷"&WöæW"âwÒ“°Ğ¢Fö7VÖVçBævWDVÆVÖVçD'”–B‚vÆW'G4&"r’æ–ææW$…DÔÂÒæÖ‡‚ÓâÆF—b6Æ73Ò&ÆW'B×–ÆÂG·‚çGÒ#ãÆF—b6Æ73Ò&ÆW'BÖF÷B#ãÂöF—câG·‚æ×ÓÂöF—cæ’æ¦ö–â‚rr“°Ğ§ĞĞ Ğ¢òòÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÒ´ä$âÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓÓĞĞ¦gVæ7F–öâ&VæFW$¶æ&â‚’°Ğ¢6öç7BbÒ7FFRæ´f–ÇFW#°Ğ¢6öç7B6V&6…FW&ÒÒ7FFRçF–VçDf–ÇFW"çG&–Ò‚’çFôÆö6ÆTÆ÷vW$66R‚“°Ğ¢6öç7BFö7F÷$¶æ&äf–ÇFW"Ò7FFRæFö7F÷$¶æ&äf–ÇFW#°Ğ¢Fö7VÖVçBævWDVÆVÖVçD'”–B‚v¶æ&âr’æ–ææW$…DÔÂÒ4´U•2æÖ‚†¶W’Â7FvT–G‚’Óâ°Ğ¢6öç7B6öÆ÷"Òö&¦V7BçfÇVW2…44ôÅ2•·7FvT–G…Ó°Ğ¢ÆWB6&G2ÒµÓ°Ğ¢7FFRæ66W2æf÷$V6‚†2Óâ²w7WrÂv–æbuÒæf÷$V6‚†BÓâ°Ğ¢6öç7B&2Ò2æ&6F5¶EÓ²–b‚&2’&WGW&ã°Ğ¢6öç7B–æF–6W2ÒµÓ°Ğ¢&2æÆ–å7FFW2æf÷$V6‚‚‡7BÆ’’Óâ²–b‡7CÓÓ×7FvT–G‚’–æF–6W2çW6‚†’“²Ò“°Ğ¢–b‚–æF–6W2æÆVæwF‚’&WGW&ã°Ğ¢–b†Fö7F÷$¶æ&äf–ÇFW"bb†2æFö7F÷$–BÇÂrr’çFôÆ÷vW$66R‚’æ–æ6ÇVFW2†Fö7F÷$¶æ&äf–ÇFW"’’&WGW&ã°Ğ¢6öç7B6V&6†&ÆUFW‡BÒG¶2çF–VçGÒG¶2æFö7F÷"ÇÂrwÒG¶2æFö7F÷$–BÇÂrwÒG¶2æ–BÇÂrwÖçFôÆö6ÆTÆ÷vW$66R‚“°Ğ¢–b‡6V&6…FW&Òbb6V&6†&ÆUFW‡Bæ–æ6ÇVFW2‡6V&6…FW&Ò’’&WGW&ã°Ğ¢6öç7BÒvWE&–ò†2æFVÆ—fW'’“°Ğ¢–b†cÓÓÒwW&vVçFRrbbÓÒwW&vVçFRr’&WGW&ã°Ğ¢–b†cÓÓÒw&÷†–ÖòrbbÓÒw&÷†–Öòr’&WGW&ã°Ğ¢–b†cÓÓÒw7WrbbBÓÒw7Wr’&WGW&ã°Ğ¢–b†cÓÓÒv–æbrbbBÓÒv–æbr’&WGW&ã°Ğ¢6&G2çW6‚‡¶2ÆBÇÆ–æF–6W2Æ&7Ò“°Ğ¢Ò’“°Ğ¢6&G2ç6÷'B‚†Æ"“Óâ°Ğ¢6öç7B&–÷&—G”÷&FW"Ò·W&vVçFS£Ç&÷†–Öó£Æö³£'Ó°Ğ¢6öç7B&–÷&—G”F–ffW&Væ6RÒ&–÷&—G”÷&FW%¶çÒÒ&–÷&—G”÷&FW%¶"çÓ°Ğ¢–b‡&–÷&—G”F–ffW&Væ6R’&WGW&â&–÷&—G”F–ffW&Væ6S°Ğ¢6öç7BFVFÆ–æTF–ffW&Væ6RÒF—5VçF–Â†æ2æFVÆ—fW'’’ÒF—5VçF–Â†"æ2æFVÆ—fW'’“°Ğ¢–b„çVÖ&W"æ—4f–æ—FR†FVFÆ–æTF–ffW&Væ6R’bbFVFÆ–æTF–ffW&Væ6R’&WGW&âFVFÆ–æTF–ffW&Væ6S°Ğ¢&WGW&âæ2çF–VçBæÆö6ÆT6ö×&R†"æ2çF–VçBÂvW2r“°Ğ¢Ò“°Ğ¢6öç7B&öG’Ò6&G2æÆVæwF‚ò6&G2æÖ†—BÓâ°Ğ¢6öç7BBÒF—5VçF–Â†—Bæ2æFVÆ—fW'’“°Ğ¢6öç7B6&D–BÒG¶—Bæ2æ–GÒÒG¶—BæGÒÒG·7FvT–G‡Ö°Ğ¢6öç7BæW‡E7FvRÒ7FvT–G‚Â2ò5DtU5·7FvT–G‚²Ò¢tf–æÆ—¦Fòs°Ğ¢&WGW&âÆF—b6Æ73Ò&&2Ö6&BG¶—BçÒ#àĞ¢ÆF—b6Æ73Ò&&2×F÷#ãÆF—b7G–ÆSÒ&Ö–â×v–GFƒ£¶fÆWƒ£#ãÆF—b6Æ73Ò&&2×F–VçB#âG¶—Bæ2çF–VçBç7Æ—B‚rÂr•³×ÓÂöF—cãÆF—b6Æ73Ò&&2ÖFö7F÷"#âG¶—Bæ2æFö7F÷$–GÇÆ—Bæ2æFö7F÷'ÓÂöF—cãÂöF—cãÇ7â6Æ73Ò&&2×G—RG¶—BæGÒ#âG¶—BæCÓÓÒw7Wsòu5UU$”õ"s¢t”ädU$”õ"wÓÂ÷7ããÂöF—càĞ¢ÆF—b6Æ73Ò&Æ–â×&ævR#àĞ¢G¶—Bæ–æF–6W2æÖ†’Óâ°Ğ¢6öç7BW&ÂÒ—Bæ2æ&6F5¶—BæEÓòç7FÅW&Ç3òå¶•Ó°Ğ¢–b‡W&Â’&WGW&âÆ‡&VcÒ"G·W&ÇÒ"F&vWCÒ%ö&Ææ²"F—FÆSÒ$FW66&v"5DÂG¶—Ò"7G–ÆSÒ'FW‡BÖFV6÷&F–öã¦æöæS¶6öÆ÷#§f"‚ÒÖ66VçB“¶föçB×vV–v‡C£c"öæ6Æ–6³Ò&WfVçBç7F÷&÷vF–öâ‚’#âG¶—ÓÂöæ°Ğ¢&WGW&â“°Ğ¢Ò’æ¦ö–â‚rr—Ò‚G¶—Bæ–æF–6W2æÆVæwF‡ÒVG2Ğ¢ÂöF—càĞ¢ÆF—b6Æ73Ò&&2Ö&÷GFöÒ#ãÇ7â6Æ73Ò&FVÆ—fW'’Ö6†—G¶—BçÒ#ãÇ7ãäTåE$TtÂ÷7ãâG¶CÃöG´ÖF‚æ'2†B—ÖBF&FV¦CÓÓÓòt„õ’s¦CÓÓÓòtÔ9äs¦G¶GÒL:Ö6ÓÂ÷7ãàĞ¢ÆF—b6Æ73Ò'V–6²Ö'Fç2#àĞ¢Æ'WGFöâ6Æ73Ò''Fâ"öæÖ÷W6VF÷vãÒ&WfVçBç&WfVçDFVfVÇB‚“²FövvÆT¶æ&å6VÆV7F÷"‚rG¶6&D–GÒrÂrG¶—Bæ2æ–GÒrÂrG¶—BæGÒrÂG·7FvT–G‡Ò’#å6VÆV66–öæ#Âö'WGFöãàĞ¢Æ'WGFöâ6Æ73Ò''FâFöæRÖ'Fâ"&–ÖÆ&VÃÒ$fç¦"G¶—Bæ–æF–6W2æÆVæwF‡ÒÆ–æVF÷&W2G¶æW‡E7FvWÒ"öæ6Æ–6³Ò&WfVçBç7F÷&÷vF–öâ‚“²6ö×ÆWFU7FvR‚rG¶—Bæ2æ–GÒrÂrG¶—BæGÒrÂG·7FvT–G‡Ò’#äfç¦"G¶—Bæ–æF–6W2æÆVæwF‡Ò(i#Âö'WGFöãàĞ¢ÂöF—cãÂöF—càĞ¢ÆF—b6Æ73Ò&¶æ&âÖÆ–â×6VÆV7F÷""–CÒ&·6VÂÒG¶6&D–GÒ"FFÖ÷Vâ×F–ÖSÒ##àĞ¢ÆF—b7G–ÆSÒ&F—7Æ“¦fÆWƒ²§W7F–g’Ö6öçFVçC§76RÖ&WGvVVã²Æ–vâÖ—FV×3¦6VçFW#²Ö&v–âÖ&÷GFöÓ£G‚#àĞ¢Ç7â7G–ÆSÒ&föçB×6—¦S£ƒ²6öÆ÷#§f"‚Ò×FW‡C2’#å6VÆV66–öì:Æ–æVF÷&W3Â÷7ãàĞ¢Æ'WGFöâöæ6Æ–6³Ò&WfVçBç7F÷&÷vF–öâ‚“²Fö7VÖVçBævWDVÆVÖVçD'”–B‚v·6VÂÒG¶6&D–GÒr’æ6Æ74Æ—7Bç&VÖ÷fR‚v÷Vâr’"7G–ÆSÒ&&6¶w&÷VæC¦æöæS²&÷&FW#¦æöæS²6öÆ÷#§f"‚Ò×FW‡C2“²7W'6÷#§ö–çFW#²föçB×6—¦S£G‚#âgF–ÖW3³Âö'WGFöãàĞ¢ÂöF—càĞ¢ÆF—b7G–ÆSÒ&Ö&v–âÖ&÷GFöÓ£Gƒ²F—7Æ“¦fÆWƒ²v£G‚#àĞ¢Æ'WGFöâöæ6Æ–6³Ò&WfVçBç7F÷&÷vF–öâ‚“²6VÆV7DÆÄ–ä¶æ&â‚rG¶6&D–GÒrÂG'VR’"7G–ÆSÒ&föçB×6—¦S£ƒ²FF–æs£'‚gƒ²#åFöF÷3Âö'WGFöãàĞ¢Æ'WGFöâöæ6Æ–6³Ò&WfVçBç7F÷&÷vF–öâ‚“²6VÆV7DÆÄ–ä¶æ&â‚rG¶6&D–GÒrÂfÇ6R’"7G–ÆSÒ&föçB×6—¦S£ƒ²FF–æs£'‚gƒ²#äæ–æwVæóÂö'WGFöãàĞ¢ÂöF—càĞ¢ÆF—b6Æ73Ò&Æ–âÖw&–B"–CÒ&·6VÂÖw&–BÒG¶6&D–GÒ"7G–ÆSÒ&Ö‚Ö†V–v‡C£ƒ¶÷fW&fÆ÷r×“¦WFó¶Ö&v–âÖ&÷GFöÓ£g‚#ãÂöF—càĞ¢Ç6VÆV7B–CÒ&·6VÂ×7FvRÒG¶6&D–GÒ"6Æ73Ò&f÷&ÒÖ–çWB"7G–ÆSÒ&Ö&v–â×&–v‡C£gƒ·FF–æs£G‚‡ƒ¶föçB×6—¦S£‚#àĞ¢Æ÷F–öâfÇVSÒ##ä–×&–Ö—#Âö÷F–öããÆ÷F–öâfÇVSÒ##åFW&Ööf÷&Ö#Âö÷F–öãàĞ¢Æ÷F–öâfÇVSÒ#"#ä6÷'FRõVÆ–FóÂö÷F–öããÆ÷F–öâfÇVSÒ#2#äÆ—7FóÂö÷F–öãàĞ¢Æ÷F–öâfÇVSÒ#B#äf–æÆ—¦FóÂö÷F–öãàĞ¢Â÷6VÆV7CàĞ¢Æ'WGFöâ6Æ73Ò''Fâ"7G–ÆSÒ&6öÆ÷#§f"‚ÒÖ66VçB“¶&÷&FW"Ö6öÆ÷#§f"‚ÒÖ66VçB’"öæ6Æ–6³Ò&WfVçBç7F÷&÷vF–öâ‚“²Ö÷fU6VÆV7FVDg&öÔ¶æ&â‚rG¶6&D–GÒrÂrG¶—Bæ2æ–GÒrÂrG¶—BæGÒrÂG·7FvT–G‡Ò’#äÖ÷fW#Âö'WGFöãàĞ¢ÂöF—càĞ¢ÂöF—cæ°Ğ¢Ò’æ¦ö–â‚rr’¢ÆF—b6Æ73Ò&V×G’Ö6öÂ#ãÆF—b6Æ73Ò&V×G’Ö–6öâ#î)xÃÂöF—cå6–âVæF–VçFW3ÂöF—cæ°Ğ¢6öç7BF÷FÄ–å7FvRÒ6&G2ç&VGV6R‚‡7VÒÂ6&B’Óâ7VÒ²6&Bæ–æF–6W2æÆVæwF‚Â“°Ğ¢&WGW&âÇ6V7F–öâ6Æ73Ò&¶æ&âÖ6öÂ"–CÒ'7FvRÒG·7FvT–G‡Ò#ãÆF—b6Æ73Ò&6öÂÖ†VFW"#ãÆF—b6Æ73Ò&6öÂÖ†VF–ær#ãÆF—b6Æ73Ò&6öÂ×F—FÆR#ãÆF—b6Æ73Ò&6öÂÖF÷B"7G–ÆSÒ&&6¶w&÷VæC¢G¶6öÆ÷'Ò#ãÂöF—câGµ5DtU5·7FvT–G…×ÓÂöF—cãÇ7â6Æ73Ò&6öÂ×7V'F—FÆR#âG¶6&G2æÆVæwF‡ÒG&&¦÷2+rG·F÷FÄ–å7FvWÒÆ–æVF÷&W3Â÷7ããÂöF—cãÇ7â6Æ73Ò&6öÂÖ6÷VçB#âG¶6&G2æÆVæwF‡ÓÂ÷7ããÂöF—cãÆF—b6Æ73Ò&6öÂÖ&öG’#âG¶&öG—ÓÂöF—cãÂ÷6V7F–öãæ°Ğ¢Ò’æ¦ö–â‚rr“°Ğ§ĞĞ Ğ¦gVæ7F–öâf–ÇFW$'•F–VçB‚’°Ğ¢7FFRçF–VçDf–ÇFW"ÒFö7VÖVçBævWDVÆVÖVçD'”–B‚wF–VçDf–ÇFW$–çWBr’çfÇVS°Ğ¢&VæFW$¶æ&â‚“°Ğ§ĞĞ Ğ¦gVæ7F–öâf–ÇFW$'”Fö7F÷$¶æ&â‚’°Ğ¢7FFRæFö7F÷$¶æ&äf–ÇFW"ÒFö7VÖVçBævWDVÆVÖVçD'”–B‚vFö7F÷$¶æ&äf–ÇFW"r“òçfÇVSòçFôÆ÷vW$66R‚’ÇÂrs°Ğ¢&VæFW$¶æ&â‚“°Ğ§ĞĞ Ğ¦gVæ7F–öâ6VÆV7DÆÄ–ä¶æ&â†6&D–BÂ6VÆV7B’°Ğ¢6öç7B—FV×2ÒFö7VÖVçBçVW'•6VÆV7F÷$ÆÂ†6·6VÂÖw&–BÒG¶6&D–GÒæ¶æ&âÖÆ–âÖ—FVÖ“°Ğ¢—FV×2æf÷$V6‚†VÂÓâVÂæ6Æ74Æ—7BçFövvÆR‚w6VÆV7FVBrÂ6VÆV7B’“°Ğ§ĞĞ Ğ¦gVæ7F–öâFövvÆT¶æ&å6VÆV7F÷"†6&D–BÂ66T–BÂ&5G—RÂ7FvT–G‚’°Ğ¢7FvT–G‚Ò'6T–çB‡7FvT–G‚Â“°Ğ¢6öç7B6VÆV7F÷"ÒFö7VÖVçBævWDVÆVÖVçD'”–B†·6VÂÒG¶6&D–GÖ“°Ğ¢–b‚6VÆV7F÷"’&WGW&ã°Ğ¢–b‡6VÆV7F÷"æ6Æ74Æ—7Bæ6öçF–ç2‚v÷Vâr’’²6VÆV7F÷"æ6Æ74Æ—7Bç&VÖ÷fR‚v÷Vâr“²&WGW&ã²ĞĞ¢Fö7VÖVçBçVW'•6VÆV7F÷$ÆÂ‚ræ¶æ&âÖÆ–â×6VÆV7F÷"æ÷Vâr’æf÷$V6‚‡2Óâ2æ6Æ74Æ—7Bç&VÖ÷fR‚v÷Vâr’“°Ğ¢6öç7B2Ò7FFRæ66W2æf–æB‡‚Óâ‚æ–BÓÓÒ66T–B“°Ğ¢–b‚2’&WGW&ã°Ğ¢6öç7B&2Ò2æ&6F5¶&5G—UÓ°Ğ¢–b‚&2’&WGW&ã°Ğ¢6öç7B–æF–6W2ÒµÓ°Ğ¢&2æÆ–å7FFW2æf÷$V6‚‚‡7BÂ’’Óâ²–b‡7BÓÓÒ7FvT–G‚’–æF–6W2çW6‚†’“²Ò“°Ğ¢6öç7Bw&–BÒFö7VÖVçBævWDVÆVÖVçD'”–B†·6VÂÖw&–BÒG¶6&D–GÖ“°Ğ¢w&–Bæ–ææW$…DÔÂÒ–æF–6W2æÖ†’ÓàĞ¢Ç7â6Æ73Ò&¶æ&âÖÆ–âÖ—FVÒ"FFÖ–GƒÒ"G¶—Ò"öæ6Æ–6³Ò&WfVçBç7F÷&÷vF–öâ‚“²F†—2æ6Æ74Æ—7BçFövvÆR‚w6VÆV7FVBr’#âG¶—ÓÂ÷7ãæ Ğ¢’æ¦ö–â‚rr“°Ğ¢6VÆV7F÷"æFF6WBæ÷VåF–ÖRÒFFRææ÷r‚“°Ğ¢6VÆV7F÷"æ6Æ74Æ—7BæFB‚v÷Vâr“°Ğ§ĞĞ Ğ¦gVæ7F–öâÖ÷fU6VÆV7FVDg&öÔ¶æ&â†6&D–BÂ66T–BÂ&5G—RÂ7W'&VçE7FvT–G‚’°Ğ¢7W'&VçE7FvT–G‚Ò'6T–çB†7W'&VçE7FvT–G‚Â“°Ğ¢6öç7B6VÆV7F÷"ÒFö7VÖVçBævWDVÆVÖVçD'”–B†·6VÂÒG¶6&D–GÖ“°Ğ¢–b‚6VÆV7F÷"’&WGW&ã°Ğ¢6öç7B6VÆV7FVBÒ6VÆV7F÷"çVW'•6VÆV7F÷$ÆÂ‚ræ¶æ&âÖÆ–âÖ—FVÒç6VÆV7FVBr“°Ğ¢–b‡6VÆV7FVBæÆVæwF‚ÓÓÒ’²ÆW'B‚u6VÆV66–öì:ÂÖVæ÷2VâÆ–æVF÷"r“²&WGW&ã²ĞĞ¢6öç7BF&vWE7FvRÒ'6T–çB†Fö7VÖVçBævWDVÆVÖVçD'”–B†·6VÂ×7FvRÒG¶6&D–GÖ’çfÇVRÂ“°Ğ¢–b†—4æâ‡F&vWE7FvR’’&WGW&ã°Ğ¢6öç7B2Ò7FFRæ66W2æf–æB‡‚Óâ‚æ–BÓÓÒ66T–B“°Ğ¢–b‚2’&WGW&ã°Ğ¢6öç7B&2Ò2æ&6F5¶&5G—UÓ°Ğ¢–b‚&2’&WGW&ã°Ğ¢W6…VæFò‚“°Ğ¢ÆWB6÷VçBÒ°Ğ¢6VÆV7FVBæf÷$V6‚†VÂÓâ°Ğ¢6öç7B–G‚Ò'6T–çB†VÂæFF6WBæ–G‚Â“°Ğ¢–b‚—4æâ†–G‚’bb&2æÆ–å7FFW5¶–G…ÒÓÓÒ7W'&VçE7FvT–G‚’°Ğ¢6öç7BöÆE7FvRÒ&2æÆ–å7FFW5¶–G…Ó°Ğ¢&2æÆ–å7FFW5¶–G…ÒÒF&vWE7FvS°Ğ¢F§W7E7Fö6´öå7FvT6†ævR†&2Â–G‚ÂöÆE7FvRÂF&vWE7FvR“°Ğ¢6÷VçB²³°Ğ¢ĞĞ¢Ò“°Ğ¢–b†6÷VçBâ’°Ğ¢6VÆV7FVBæf÷$V6‚†VÂÓâVÂæ6Æ74Æ—7Bç&VÖ÷fR‚w6VÆV7FVBr’“°Ğ¢6VÆV7F÷"æ6Æ74Æ—7Bç&VÖ÷fR‚v÷Vâr“°Ğ¢FD7F—f—G’†)ÈşûˆòÖ÷fW"G¶6÷VçGÒÆ–ââFRG¶2çF–VçGÒG·F&vWE7FvRÓÓÒd”äÅõ5DtRòtf–æÆ—¦Fòr¢5DtU5·F&vWE7FvU×Ö“°Ğ¢&VæFW$ÆÂ‚“°Ğ¢6†÷uFö7B†G¶6÷VçGÒÆ–ââ(i"G·F&vWE7FvRÓÓÒd”äÅõ5DtRòtf–æÆ—¦Fòr¢5DtU5·F&vWE7FvU×Ö“°Ğ¢ÒVÇ6R°Ğ¢ÆW'B‚tæ–æwVæòFRÆ÷2Æ–æVF÷&W26VÆV66–öæF÷2W7L:VâÆWF7GVÂâr“°Ğ¢ĞĞ§ĞĞ Ğ¦Fö7VÖVçBæFDWfVçDÆ—7FVæW"‚v6Æ–6²rÂgVæ7F–öâ†R’°Ğ¢6öç7B÷Vå6VÆV7F÷'2ÒFö7VÖVçBçVW'•6VÆV7F÷$ÆÂ‚ræ¶æ&âÖÆ–â×6VÆV7F÷"æ÷Vâr“°Ğ¢–b‚÷Vå6VÆV7F÷'2æÆVæwF‚’&WGW&ã°Ğ¢–b†RçF&vWBæ6Æ÷6W7B‚ræ¶æ&âÖÆ–â×6VÆV7F÷"æ÷Vâr’ÇÂRçF&vWBæ6Æ÷6W7B‚rçV–6²Ö'Fç2r’’&WGW&ã°Ğ¢÷Vå6VÆV7F÷'2æf÷$V6‚‡2Óâ°Ğ¢6öç7B÷VåF–ÖRÒ'6T–çB‡2æFF6WBæ÷VåF–ÖR’ÇÂ°Ğ¢–b„FFRææ÷r‚’Ò÷VåF–ÖRâ#’2æ6Æ74Æ—7Bç&VÖ÷fR‚v÷Vâr“°Ğ¢Ò“°Ğ§Ò“°Ğ Ğ¦Fö7VÖVçBçVW'•6VÆV7F÷$ÆÂ‚rçV–6²Ö'Fç2ç'Fâr’æf÷$V6‚†'FâÓâ°Ğ¢'FâæFDWfVçDÆ—7FVæW"‚wF÷V6‡7F'BrÂgVæ7F–öâ†R’²Rç&WfVîûçKh‘éì¶»§q«^t™IÎŒË	Ü™\\˜YÉÎŒË	Ü™\\˜YÜÉÎŒË	İ\›Z[™ÜÉÎŒË	İ\›Z[™IÎŒËBˆ	ÛÈX[™0êIÎŒË	ÛÜÈX[™0êIÎŒË	ÛX[™\‰ÎŒË	ÛX[™0êIÎŒËBˆ	Ù[™YİpêIÎ	Ù[™YØ\‰Î	Ù[™YØYÉÎ	Ù[™YØYÜÉÎ	Ùš[˜[XğêIÎBˆ	Ùš[˜[^˜\‰Î	Ùš[˜[^˜YÉÎ	Ùš[˜[XÙIÎBŸNÃBƒB˜ÛÛœİ[šYY\Õ›ŞˆHÃBˆ	ØÙ\›ÉÎŒ	İ[›ÉÎŒK	İ[˜IÎŒK	ÙÜÉÎŒ‹	İ™\ÉÎŒË	ØİX]›ÉÎBˆ	ØÚ[˜ÛÉÎK	ÜÙZ\ÉÎ‹	ÜÚY]IÎË	ÛØÚÉÎ	ÛY]™IÎCBŸNÃB˜ÛÛœİ\ÜXÚX[\Õ›ŞˆHÃBˆ	ÙY^‰ÎŒL	ÛÛ˜ÙIÎŒLK	ÙØÙIÎŒL‹	İ™XÙIÎŒLË	ØØ]Ü˜ÙIÎŒMBˆ	Ü]Z[˜ÙIÎŒMK	ÙYXÚ\ğêZ\ÉÎŒM‹	ÙYXÚ\ÚY]IÎŒMË	ÙYXÚ[ØÚÉÎŒNBˆ	ÙYXÚ[Y]™IÎŒNK	İ™Z[IÎŒŒ	İ™Z[][›ÉÎŒŒK	İ™Z[Y0ìÜÉÎŒŒ‹Bˆ	İ™Z[]°ê\ÉÎŒŒË	İ™Z[XİX]›ÉÎŒ	İ™Z[XÚ[˜ÛÉÎŒK	İ™Z[\ğêZ\ÉÎŒ‹Bˆ	İ™Z[\ÚY]IÎŒË	İ™Z[[ØÚÉÎŒ	İ™Z[[Y]™IÎŒCBŸNÃB˜ÛÛœİXÙ[˜\Õ›ŞˆHÃBˆ	İ™Z[IÎŒÌ	ØİX\™[IÎ	ØÚ[˜İY[IÎL	ÜÙ\Ù[IÎŒBˆ	ÜÙ][IÎÌ	ÛØÚ[IÎ	Û›İ™[IÎLBŸNÃBƒB™[˜İ[Ûˆ›Ü›X[^˜\“[Y\›Ô[Xœ˜J[Xœ˜JHÃBˆ[Xœ˜HH[Xœ˜KÓİÙ\Ø\ÙJ
+Kš[J
+NÃBˆYˆ
+[šYY\Õ›Ş–Ü[Xœ˜WHOOH[™Yš[™Y
+H™]\›ˆ[šYY\Õ›Ş–Ü[Xœ˜WNÃBˆYˆ
+\ÜXÚX[\Õ›Ş–Ü[Xœ˜WHOOH[™Yš[™Y
+H™]\›ˆ\ÜXÚX[\Õ›Ş–Ü[Xœ˜WNÃBˆYˆ
+XÙ[˜\Õ›Ş–Ü[Xœ˜WHOOH[™Yš[™Y
+H™]\›ˆXÙ[˜\Õ›Ş–Ü[Xœ˜WNÃBˆ™]\›ˆ[ÃBŸCBƒB™[˜İ[Ûˆ›Ü›X[^™S[X™\œÊ^
+HÃBˆ]›Ü›X[^™YH^œ™\XÙJBˆ×Š™Z[_İX\™[_Ú[˜İY[_Ù\Ù[_Ù][_ØÚ[_›İ™[JWÊŞWÊÊ[›ß[˜_Üß™\ßİX]›ßÚ[˜ÛßÙZ\ßÚY]_ØÚßY]™JW‹ÙÚKBˆ
+X]ÚXÙ[˜K[šYY
+HOˆÃBˆÛÛœİXÈHXÙ[˜\Õ›Ş–ÙXÙ[˜KÓİÙ\Ø\ÙJ
+WNÃBˆÛÛœİ[šHH[šYY\Õ›Ş–İ[šYYÓİÙ\Ø\ÙJ
+WNÃBˆ™]\›ˆ
+XÈ
+È[šJKÔİš[™Ê
+NÃBˆCBˆ
+NÃBˆ›Üˆ
+ÛÛœİÜ[Xœ˜K[WHÙˆØš™Xİ™[šY\Ê\ÜXÚX[\Õ›ŞŠJHÃBˆ›Ü›X[^™YH›Ü›X[^™Yœ™\XÙJ™]È™YÑ^
+	×‰È
+È[Xœ˜H
+È	×‰Ë	ÙÚIÊK[KÔİš[™Ê
+JNÃBˆCBˆ›Üˆ
+ÛÛœİÜ[Xœ˜K[WHÙˆØš™Xİ™[šY\Ê[šYY\Õ›ŞŠJHÃBˆ›Ü›X[^™YH›Ü›X[^™Yœ™\XÙJ™]È™YÑ^
+	×‰È
+È[Xœ˜H
+È	×‰Ë	ÙÚIÊK[KÔİš[™Ê
+JNÃBˆCBˆ›Üˆ
+ÛÛœİÜ[Xœ˜K[WHÙˆØš™Xİ™[šY\ÊXÙ[˜\Õ›ŞŠJHÃBˆ›Ü›X[^™YH›Ü›X[^™Yœ™\XÙJ™]È™YÑ^
+	×‰È
+È[Xœ˜H
+È	ÊÈWÊŞJIË	ÙÚIÊK[KÔİš[™Ê
+JNÃBˆCBˆ™]\›ˆ›Ü›X[^™YÃBŸCBƒB™[˜İ[Ûˆ^˜Xİ[X™\œÊ^
+HÃBˆÛÛœİ›Ü›X[^™YH›Ü›X[^™S[X™\œÊ^
+NÃBˆÛÛœİ[X™\œÈH×NÃBˆÛÛœİ˜[™ÙT™YÙ^HÊÎ™[ÊÊOÊ
+ÊWÊŠÎ˜[ß_\İ_JWÊŠ
+ÊKÙÎÃBˆ]X]ÚÃBˆÚ[H
+
+X]ÚH˜[™ÙT™YÙ^™^XÊ›Ü›X[^™Y
+JHOOH[
+HÃBˆÛÛœİİ\H\œÙR[
+X]ÚÌWJNÃBˆÛÛœİ[™H\œÙR[
+X]ÚÌ—JNÃBˆ›Üˆ
+]HHX]›Z[Šİ\[™
+NÈHHX]›X^
+İ\[™
+NÈJÊÊHÃBˆYˆ
+[[X™\œËš[˜ÛY\ÊJJH[X™\œËœ\Ú
+JNÃBˆCBˆCBˆÛÛœİ[YÚ]ÈH›Ü›X[^™Y›X]Ú
+×
+ËÙÊNÃBˆYˆ
+[YÚ]ÊHÃBˆ[YÚ]Ë™›Ü‘XXÚ
+[TİˆOˆÃBˆÛÛœİ[HH\œÙR[
+[TİŠNÃBˆYˆ
+[[X™\œËš[˜ÛY\Ê[JJH[X™\œËœ\Ú
+[JNÃBˆJNÃBˆCBˆ™]\›ˆ[X™\œËœÛÜ
+
+KŠOO˜KXŠNÃBŸCBƒB™[˜İ[Ûˆ^˜Xİ[X™\œÓ™X\\˜Ê^\˜Õ\JHÃBˆÛÛœİ›Ü›X[^™YH›Ü›X[^™S[X™\œÊ^
+NÃBˆÛÛœİ\˜ÕÛÜ™ÈH\˜Õ\HOOH	Üİ\	ÈBˆÈÉÜİ\\š[Ü‰Ë	Üİ\\š[Ü™\ÉË	Ø\œšX˜IË	Üİ\	×CBˆˆÉÚ[™™\š[Ü‰Ë	Ú[™™\š[Ü™\ÉË	ØX˜Z›ÉË	Ú[™‰×NÃBˆÛÛœİ\˜ÔÜÚ][ÛœÈH×NÃBˆ›Üˆ
+ÛÛœİÛÜ™Ùˆ\˜ÕÛÜ™ÊHÃBˆ]YH›Ü›X[^™Yš[™^ÙŠÛÜ™
+NÃBˆÚ[H
+YOOHLJHÃBˆ\˜ÔÜÚ][ÛœËœ\Ú
+È[™^ˆYÛÜ™JNÃBˆYH›Ü›X[^™Yš[™^ÙŠÛÜ™Y
+ÈJNÃBˆCBˆCBˆYˆ
+\˜ÔÜÚ][ÛœË›[™İOOH
+H™]\›ˆ×NÃBˆÛÛœİ[[X™\œÈH™]ÈÙ]
+
+NÃBˆÛÛœİÚ[™İÔÚ^™HHÃBˆ\˜ÔÜÚ][ÛœË™›Ü‘XXÚ
+ÜÈOˆÃBˆÛÛœİİ\HX]›X^
+ÜËš[™^HÚ[™İÔÚ^™JNÃBˆÛÛœİ[™HX]›Z[Š›Ü›X[^™Y›[™İÜËš[™^
+ÈÜËÛÜ™›[™İ
+ÈÚ[™İÔÚ^™JNÃBˆÛÛœİœ˜YÛY[H›Ü›X[^™YœİXœİš[™Êİ\[™
+NÃBˆÛÛœİ[X™\œÒ[‘œ˜YÛY[H^˜Xİ[X™\œÊœ˜YÛY[
+NÃBˆ[X™\œÒ[‘œ˜YÛY[™›Ü‘XXÚ
+ˆOˆ[[X™\œË˜Y
+ŠJNÃBˆJNÃBˆ™]\›ˆË‹‹˜[[X™\œ×KœÛÜ
+
+KŠOO˜KXŠNÃBŸCBƒB™[˜İ[Ûˆš[™]Y[Y[[ÛŠ^
+HÃBˆÛÛœİÛÜ™ÈH^ÓİÙ\Ø\ÙJ
+KœÜ]
+Ö×ËË—JËÊNÃBˆ›Üˆ
+ÛÛœİÛÜ™ÙˆÛÜ™ÊHÃBˆYˆ
+ÛÜ™›[™İŠHÛÛ[YNÃBˆÛÛœİX]ÚHİ]K˜Ø\Ù\Ë™š[™
+ÈOˆBˆËœ]Y[ÓİÙ\Ø\ÙJ
+Kš[˜ÛY\ÊÛÜ™
+HBˆ
+Ë™ØİÜ’Y	‰ˆË™ØİÜ’YÓİÙ\Ø\ÙJ
+Kš[˜ÛY\ÊÛÜ™
+JCBˆ
+NÃBˆYˆ
+X]Ú
+H™]\›ˆX]ÚÃBˆCBˆ™]\›ˆ[ÃBŸCBƒB™[˜İ[Ûˆ›ØÙ\ÜÕ›ÚXÙPÛÛ[X[™
+˜[œØÜš\
+HÃBˆ]\™Ù]İYÙHHLNÃBˆ›Üˆ
+ÛÛœİİÛÜ™İYÙWHÙˆØš™Xİ™[šY\Ê›ÚXÙTİYÙSX\
+JHÃBˆYˆ
+˜[œØÜš\š[˜ÛY\ÊÛÜ™
+JHÈ\™Ù]İYÙHHİYÙNÈœ™XZÎÈCBˆCBˆYˆ
+\™Ù]İYÙHOOHLJHÃBˆÚİÕØ\İ
+	Ó›È[[™0ëHH]\KˆXğëNˆš[\š[Z\ˆ‹\›[Ù›Ü›X\ˆ‹˜ÛÜ\‹Ü[\ˆ‹›\İÈˆÈ™š[˜[^˜YÈ‹‰ÊNÃBˆ™]\›ÃBˆCBˆÛÛœİX]ÚYØ\ÙHHš[™]Y[Y[[ÛŠ˜[œØÜš\
+NÃBˆYˆ
+[X]ÚYØ\ÙJHÈÚİÕØ\İ
+	Ó›È™XÛÛ›ØğëH[XÚY[K‰ÊNÈ™]\›ÈCBˆÛÛœİİ\[X™\œÈH^˜Xİ[X™\œÓ™X\\˜Ê˜[œØÜš\	Üİ\	ÊNÃBˆÛÛœİ[™“[X™\œÈH^˜Xİ[X™\œÓ™X\\˜Ê˜[œØÜš\	Ú[™‰ÊNÃBˆYˆ
+İ\[X™\œË›[™İOOH	‰ˆ[™“[X™\œË›[™İOOH
+HÃBˆÛÛœİ[[X™\œÈH^˜Xİ[X™\œÊ˜[œØÜš\
+NÃBˆYˆ
+[[X™\œË›[™İOOH
+HÈÚİÕØ\İ
+	Ó›È\ØİXÚ0êH°î›Y\›ÜË‰ÊNÈ™]\›ÈCBˆYˆ
+X]ÚYØ\ÙK˜\˜ØY\Ëœİ\
+Hİ\[X™\œËœ\Ú
+‹‹˜[[X™\œÊNÃBˆYˆ
+X]ÚYØ\ÙK˜\˜ØY\Ëš[™ŠH[™“[X™\œËœ\Ú
+‹‹˜[[X™\œÊNÃBˆCBˆ[™[™Õ›ÚXÙPXİ[ÛœÈHÈ\™Ù]İYÙKX]ÚYØ\ÙKXİ[ÛœÎˆ×HNÃBˆYˆ
+İ\[X™\œË›[™İˆ	‰ˆX]ÚYØ\ÙK˜\˜ØY\Ëœİ\
+HÃBˆ[™[™Õ›ÚXÙPXİ[ÛœË˜Xİ[ÛœËœ\Ú
+È\˜Õ\Nˆ	Üİ\	Ë[X™\œÎˆË‹‹›™]ÈÙ]
+İ\[X™\œÊWKœÛÜ
+
+KŠOO˜KXŠHJNÃBˆCBˆYˆ
+[™“[X™\œË›[™İˆ	‰ˆX]ÚYØ\ÙK˜\˜ØY\Ëš[™ŠHÃBˆ[™[™Õ›ÚXÙPXİ[ÛœË˜Xİ[ÛœËœ\Ú
+È\˜Õ\Nˆ	Ú[™‰Ë[X™\œÎˆË‹‹›™]ÈÙ]
+[™“[X™\œÊWKœÛÜ
+
+KŠOO˜KXŠHJNÃBˆCBˆYˆ
+[™[™Õ›ÚXÙPXİ[ÛœË˜Xİ[ÛœË›[™İOOH
+HÈÚİÕØ\İ
+	Ó›È^H[[™XYÜ™\È\˜H[İ™\‹‰ÊNÈ™]\›ÈCBˆ™[™\•›ÚXÙPÛÛ™š\›X][ÛŠX]ÚYØ\ÙKœ]Y[\™Ù]İYÙJNÃBŸCBƒB™[˜İ[Ûˆ™[™\•›ÚXÙPÛÛ™š\›X][ÛŠ]Y[˜[YK\™Ù]İYÙJHÃBˆYˆ
+\[™[™Õ›ÚXÙPXİ[ÛœÊH™]\›ÃBˆÛÛœİÛÛ[HØİ[Y[™Ù][[Y[RY
+	İ›ÚXÙPÛÛ™š\›PÛÛ[	ÊNÃBˆÛÛœİİYÙS˜[Y\ÈHÕQÑTË˜ÛÛ˜Ø]
+ÉÑš[˜[^˜YÉ×JNÃBˆ][H”XÚY[Nˆİ›Û™Ï‰Ü[™[™Õ›ÚXÙPXİ[ÛœË›X]ÚYØ\ÙKœ]Y[OÜİ›Û™ÏÜ˜ÃBˆ[
+ÏH‘]\Nˆİ›Û™Ï‰ÜİYÙS˜[Y\Öİ\™Ù]İYÙW_OÜİ›Û™ÏÜ˜ÃBˆ[
+ÏH	Ï[[™XYÜ™\ÎÜ[‰ÎÃBˆ[™[™Õ›ÚXÙPXİ[ÛœË˜Xİ[ÛœË™›Ü‘XXÚ
+HOˆÃBˆÛÛœİ\˜Ó˜[YHHK˜\˜Õ\HOOH	Üİ\	ÈÈ	Ôİ\\š[Ü‰Èˆ	Ò[™™\š[Ü‰ÎÃBˆ[
+ÏHO‰Ø\˜Ó˜[Y_Nˆ	ØK›[X™\œËš›Ú[Š	Ë	Ê_OÛO˜ÃBˆJNÃBˆ[
+ÏH	Ïİ[‰ÎÃBˆÛÛ[š[›™\’SH[ÃBˆÜ[“[Ù[
+	İ›ÚXÙPÛÛ™š\›S[Ù[	ÊNÃBŸCBƒB™[˜İ[Ûˆ^Xİ]U›ÚXÙPÛÛ[X[™
+
+HÃBˆYˆ
+\[™[™Õ›ÚXÙPXİ[ÛœÊH™]\›ÃBˆÛÛœİÈX]ÚYØ\ÙKXİ[ÛœË\™Ù]İYÙHHH[™[™Õ›ÚXÙPXİ[ÛœÎÃBˆ][İ™YÛİ[HÃBˆXİ[ÛœË™›Ü‘XXÚ
+Xİ[ÛˆOˆÃBˆÛÛœİ\˜ÈHX]ÚYØ\ÙK˜\˜ØY\ÖØXİ[Û‹˜\˜Õ\WNÃBˆYˆ
+X\˜ÊH™]\›ÃBˆXİ[Û‹›[X™\œË™›Ü‘XXÚ
+HOˆÃBˆYˆ
+HH	‰ˆH\˜Ëİ[
+HÃBˆÛÛœİÛİYÙHH\˜Ë˜[[”İ]\ÖÚWNÃBˆ\˜Ë˜[[”İ]\ÖÚWHH\™Ù]İYÙNÃBˆY\İİØÚÓÛ”İYÙPÚ[™ÙJ\˜ËKÛİYÙK\™Ù]İYÙJNÃBˆ[İ™YÛİ[
+ÊÎÃBˆCBˆJNÃBˆJNÃBˆYˆ
+[İ™YÛİ[ˆ
+HÃBˆYXİ]š]J<'ã©›Şˆ	ÛX]ÚYØ\ÙKœ]Y[HH	Û[İ™YÛİ[H[[‹ˆ8¡¤ˆ	ÔÕQÑTÖİ\™Ù]İYÙWH	Ñš[˜[^˜YÉßX
+NÃBˆ™[™\[
+
+NÃBˆÚİÕØ\İ
+	Û[İ™YÛİ[H[[‹ˆ[İšYÜÈÜˆ›Şˆ8§$Ø
+NÃBˆH[ÙHÚİÕØ\İ
+	Ó›ÈÙHYÈ[İ™\ˆš[™ğî›ˆ[[™XYÜ‹‰ÊNÃBˆÛÜÙS[Ù[
+	İ›ÚXÙPÛÛ™š\›S[Ù[	ÊNÃBˆ[™[™Õ›ÚXÙPXİ[ÛœÈH[ÃBŸCBƒB™Øİ[Y[˜Y]™[\İ[™\Š	ÚÙ^YİÛ‰ËHOˆÃBˆYˆ
+K˜İ›Ù^H	‰ˆKšÙ^HOOH	ÛIÊHÈKœ™]™[Y˜][
+
+NÈİ\›ÚXÙPÛÛ[X[™
+
+NÈCBŸJNÃBƒB‹ËÈOOOOOOOOOOOOOOOOOOOH’SS–TÈOOOOOOOOOOOOOOOOOOOCBœİ]K™š[˜[˜\Ñš[\ˆH	Ø[	ÎÃBœİ]K™š[˜[˜TXÚY[Qš[\ˆH	ÉÎÃBœİ]K™š[˜[˜SY\Ñš[\ˆH	ÉÎÃBœİ]K™š[˜[˜\ÑÜ›İ\H˜[ÙNÃBƒB™[˜İ[ÛˆÙ]š[˜[˜\Ñš[\Š‹[
+HÃBˆİ]K™š[˜[˜\Ñš[\ˆHÃBˆØİ[Y[œ]Y\TÙ[XİÜ[
+	ÈİšY]ËYš[˜[˜\È™š[\œË\›İÈ™š[\‹X‰ÊK™›Ü‘XXÚ
+ˆOˆ‹˜Û\ÜÓ\İœ™[[İ™J	ØXİ]™IÊJNÃBˆYˆ
+[
+H[˜Û\ÜÓ\İ˜Y
+	ØXİ]™IÊNÃBˆ™[™\‘š[˜[˜\Ê
+NÃBŸCBƒB™[˜İ[Ûˆš[\‘š[˜[˜\Ê
+HÃBˆİ]K™š[˜[˜TXÚY[Qš[\ˆHØİ[Y[™Ù][[Y[RY
+	Ùš[˜[˜TXÚY[Qš[\‰ÊK˜[YNÃBˆİ]K™š[˜[˜SY\Ñš[\ˆHØİ[Y[™Ù][[Y[RY
+	Ùš[˜[˜SY\Ñš[\‰ÊK˜[YNÃBˆ™[™\‘š[˜[˜\Ê
+NÃBŸCBƒB™[˜İ[ÛˆÙÙÛQš[˜[˜\ÑÜ›İ\
+
+HÃBˆİ]K™š[˜[˜\ÑÜ›İ\H\İ]K™š[˜[˜\ÑÜ›İ\ÃBˆØİ[Y[œ]Y\TÙ[XİÜŠ	ÈİšY]ËYš[˜[˜\È™š[\œË\›İÈ™š[\‹X›\İXÚ[	ÊK˜Û\ÜÓ\İÙÙÛJ	ØXİ]™IËİ]K™š[˜[˜\ÑÜ›İ\
+NÃBˆ™[™\‘š[˜[˜\Ê
+NÃBŸCBƒB™[˜İ[Ûˆ™[™\‘š[˜[˜\Ê
+HÃBˆYˆ
+Øİ[Y[™Ù][[Y[RY
+	İšY]ËYš[˜[˜\ÉÊKœİ[K™\Ü^HOOH	Û›Û™IÊH™]\›ÃBƒBˆÛÛœİš[˜[˜\Ñ\ÙPØ\ÛÜÈHİ]K˜Ø\Ù\ÃBˆ™š[\ŠÈOˆ
+Ë›[ÛÕİ[
+Hˆ
+Ë™YÜ™\ÛÈ
+Hˆ
+CBˆ›X\
+ÈOˆÃBˆÛÛœİX[X[Hİ]K™š[˜[˜\Ë™š[™
+ˆOˆ‹˜Ø\ÙRYOOHËšY
+NÃBˆ™]\›ˆÃBˆYˆËšYØ\ÙRYˆËšY]Y[ˆËœ]Y[ØİÜ’YˆË™ØİÜ’YBˆ[ÛÕİ[ˆË›[ÛÕİ[YÜ™\ÛÎˆË™YÜ™\ÛÈBˆYÛÜÎˆX[X[È
+X[X[œYÛÜÈ×JHˆ×KBˆYÜ™\ÛÜÎˆX[X[È
+X[X[™YÜ™\ÛÜÈ×JHˆ×KBˆ™XÚQ[™YØNˆË™[]™\K›İ\ÎˆË›ØœÈ	ÉÃBˆNÃBˆJNÃBˆÛÛœİØ\ÙRYĞÛÛ‘š[˜[˜\ÈHš[˜[˜\Ñ\ÙPØ\ÛÜË›X\
+ˆOˆ‹˜Ø\ÙRY
+NÃBˆÛÛœİš[˜[˜\ÓX[X[\ÈHİ]K™š[˜[˜\Ë™š[\ŠˆOˆXØ\ÙRYĞÛÛ‘š[˜[˜\Ëš[˜ÛY\Ê‹˜Ø\ÙRY
+JNÃBˆ]\İHHË‹‹™š[˜[˜\Ñ\ÙPØ\ÛÜË‹‹™š[˜[˜\ÓX[X[\×NÃBƒBˆÛÛœİXÚY[Qš[›ÈHİ]K™š[˜[˜TXÚY[Qš[\‹ÓİÙ\Ø\ÙJ
+NÃBˆÛÛœİY\Ñš[›ÈHİ]K™š[˜[˜SY\Ñš[\ÃBˆ\İHH\İK™š[\ŠˆOˆÃBˆYˆ
+XÚY[Qš[›È	‰ˆY‹œ]Y[ÓİÙ\Ø\ÙJ
+Kš[˜ÛY\ÊXÚY[Qš[›ÊJH™]\›ˆ˜[ÙNÃBˆYˆ
+Y\Ñš[›ÊHÃBˆYˆ
+Y‹™™XÚQ[™YØJH™]\›ˆ˜[ÙNÃBˆÛÛœİ™XÚHH™]È]J‹™™XÚQ[™YØH
+È	ÕŒŒ	ÊNÃBˆÛÛœİY\Ô™YÚ\İ›ÈH	Ù™XÚK™Ù][YX\Š
+_KIÔİš[™Ê™XÚK™Ù][Û
+
+JÌJKœYİ\
+‹	Ì	Ê_XÃBˆYˆ
+Y\Ô™YÚ\İ›ÈOOHY\Ñš[›ÊH™]\›ˆ˜[ÙNÃBˆCBˆ™]\›ˆYNÃBˆJNÃBƒBˆYˆ
+İ]K™š[˜[˜\Ñš[\ˆOOH	Ü[™Y[IÊHÃBˆ\İHH\İK™š[\ŠˆOˆ‹œYÛÜËœ™YXÙJ
+Ë
+OOœÊÜ›[ÛË
+H‹›[ÛÕİ[
+NÃBˆH[ÙHYˆ
+İ]K™š[˜[˜\Ñš[\ˆOOH	ØÛÛ\]ÉÊHÃBˆ\İHH\İK™š[\ŠˆOˆ‹œYÛÜËœ™YXÙJ
+Ë
+OOœÊÜ›[ÛË
+HH‹›[ÛÕİ[
+NÃBˆCBƒBˆ]İ[ÛØœ˜\ˆHİ[ÛØœ˜YÈHİ[YÜ™\ÛÜÈH[™Y[\ÈHÃBˆİ]K™š[˜[˜\Ë™›Ü‘XXÚ
+ˆOˆÃBˆİ[ÛØœ˜\ˆ
+ÏH‹›[ÛÕİ[ÃBˆÛÛœİYØYÈH‹œYÛÜËœ™YXÙJ
+Ë
+OOœÊÜ›[ÛË
+NÃBˆİ[ÛØœ˜YÈ
+ÏHYØYÎÃBˆYˆ
+‹™YÜ™\ÛÜÊHİ[YÜ™\ÛÜÈ
+ÏH‹™YÜ™\ÛÜËœ™YXÙJ
+ËJOOœÊÙK›[ÛË
+NÃBˆYˆ
+YØYÈ‹›[ÛÕİ[
+H[™Y[\ÊÊÎÃBˆJNÃBˆš[˜[˜\Ñ\ÙPØ\ÛÜË™›Ü‘XXÚ
+ˆOˆÃBˆYˆ
+\İ]K™š[˜[˜\ËœÛÛYJOˆ˜Ø\ÙRYOOH‹˜Ø\ÙRY
+JHİ[ÛØœ˜\ˆ
+ÏH‹›[ÛÕİ[ÃBˆJNÃBˆÛÛœİ˜[[˜ÙHHİ[ÛØœ˜YÈHİ[YÜ™\ÛÜÎÃBƒBˆØİ[Y[™Ù][[Y[RY
+	Ùš[˜[˜\Ô™\İ[Y[‰ÊKš[›™\’SHBˆ]ˆÛ\ÜÏHœİ]XØ\™]ˆÛ\ÜÏHœİ][X™[•İ[HÛØœ˜\Ù]]ˆÛ\ÜÏHœİ]]˜[YHˆİ[OH˜ÛÛÜ˜\ŠKXXØÙ[
+H‰	İİ[ÛØœ˜\‹Ñš^Y
+
+_OÙ]Ù]ƒBˆ]ˆÛ\ÜÏHœİ]XØ\™]ˆÛ\ÜÏHœİ][X™[•İ[ÛØœ˜YÏÙ]]ˆÛ\ÜÏHœİ]]˜[YHˆİ[OH˜ÛÛÜ˜\ŠKYÜ™Y[ŠH‰	İİ[ÛØœ˜YËÑš^Y
+
+_OÙ]Ù]ƒBˆ]ˆÛ\ÜÏHœİ]XØ\™]ˆÛ\ÜÏHœİ][X™[”[™Y[\ÏÙ]]ˆÛ\ÜÏHœİ]]˜[YHˆİ[OH˜ÛÛÜ˜\ŠK\™Y
+H‰Ü[™Y[\ßOÙ]Ù]ƒBˆ]ˆÛ\ÜÏHœİ]XØ\™]ˆÛ\ÜÏHœİ][X™[”°ìŞˆ™[˜ËÙ]]ˆÛ\ÜÏHœİ]]˜[YHˆİ[OH˜ÛÛÜ˜\ŠK^Y[İÊH‰Ü›Ş[[ÜÕ™[˜Ú[ZY[ÜÊ
+_OÙ]Ù]ƒBˆ]ˆÛ\ÜÏHœİ]XØ\™]ˆÛ\ÜÏHœİ][X™[‘YÜ™\ÛÜÏÙ]]ˆÛ\ÜÏHœİ]]˜[YHˆİ[OH˜ÛÛÜ˜\ŠK\™Y
+H‰	İİ[YÜ™\ÛÜËÑš^Y
+
+_OÙ]Ù]ƒBˆ]ˆÛ\ÜÏHœİ]XØ\™]ˆÛ\ÜÏHœİ][X™[˜[[˜ÙOÙ]]ˆÛ\ÜÏHœİ]]˜[YHˆİ[OH˜ÛÛÜ‰Ø˜[[˜ÙHHÈ	İ˜\ŠKYÜ™Y[ŠIÈˆ	İ˜\ŠK\™Y
+IßH‰	Ø˜[[˜ÙKÑš^Y
+
+_OÙ]Ù]ƒBˆÃBƒBˆYˆ
+İ]K™š[˜[˜\ÑÜ›İ\
+HÃBˆÛÛœİÜ›İ\YHßNÃBˆ\İK™›Ü‘XXÚ
+ˆOˆÃBˆÛÛœİÙ^HH‹™ØİÜ’Y	ÔÚ[ˆØİÜ‰ÎÃBˆYˆ
+YÜ›İ\YÚÙ^WJHÜ›İ\YÚÙ^WHHÈØİÜ’YˆÙ^K[ÛÕİ[ˆYØYÎˆYÜ™\ÛÎˆÛİ[ˆNÃBˆÜ›İ\YÚÙ^WK›[ÛÕİ[
+ÏH‹›[ÛÕİ[ÃBˆÜ›İ\YÚÙ^WKœYØYÈ
+ÏH‹œYÛÜËœ™YXÙJ
+Ë
+OOœÊÜ›[ÛË
+NÃBˆÜ›İ\YÚÙ^WK™YÜ™\ÛÈ
+ÏH‹™YÜ™\ÛÈÃBˆ
+‹™YÜ™\ÛÜÈ×JK™›Ü‘XXÚ
+HOˆÜ›İ\YÚÙ^WK™YÜ™\ÛÈ
+ÏHK›[ÛÊNÃBˆÜ›İ\YÚÙ^WK˜Ûİ[
+ÊÎÃBˆJNÃBˆØİ[Y[™Ù][[Y[RY
+	Ùš[˜[˜\Ó\İ	ÊKš[›™\’SHØš™Xİ˜[Y\ÊÜ›İ\Y
+K›X\
+ÈOˆBˆ]ˆÛ\ÜÏH™š[˜[˜KXØ\™ƒBˆ]ˆÛ\ÜÏH™š[˜[˜KZXY\ˆÜ[ˆÛ\ÜÏH™š[˜[˜K\XÚY[H‰ÙË™ØİÜ’YOÜÜ[Ü[‰ÙË˜Ûİ[HØ\ÛÜÏÜÜ[Ù]ƒBˆ]ˆÛ\ÜÏH™š[˜[˜K[[ÛÜÈƒBˆÜ[•İ[ˆ		ÙË›[ÛÕİ[Ñš^Y
+
+_OÜÜ[ƒBˆÜ[ÛØœ˜YÎˆ		ÙËœYØYËÑš^Y
+
+_OÜÜ[ƒBˆÜ[‘YÜ™\ÛÎˆ		ÙË™YÜ™\ÛËÑš^Y
+
+_OÜÜ[ƒBˆÜ[˜[[˜ÙNˆ		ÊËœYØYÈHË™YÜ™\ÛÊKÑš^Y
+
+_OÜÜ[ƒBˆÙ]ƒBˆÙ]ƒBˆ
+Kš›Ú[Š	ÉÊNÃBˆ™]\›ÃBˆCBƒBˆØİ[Y[™Ù][[Y[RY
+	Ùš[˜[˜\Ó\İ	ÊKš[›™\’SH\İK›X\
+ˆOˆÃBˆÛÛœİYØYÈH‹œYÛÜËœ™YXÙJ
+Ë
+OOœÊÜ›[ÛË
+NÃBˆÛÛœİ™\İ[HH‹›[ÛÕİ[HYØYÎÃBˆ]\İYÈH	Ü[™Y[IÎÃBˆYˆ
+YØYÈH‹›[ÛÕİ[
+H\İYÈH	ØÛÛ\]ÉÎÃBˆ[ÙHYˆ
+YØYÈˆ
+H\İYÈH	Ü\˜ÚX[	ÎÃBˆ™]\›ˆ]ˆÛ\ÜÏH™š[˜[˜KXØ\™ƒBˆ]ˆÛ\ÜÏH™š[˜[˜KZXY\ˆƒBˆÜ[ˆÛ\ÜÏH™š[˜[˜K\XÚY[H‰Ù‹™ØİÜ’YÈ‹™ØİÜ’Y
+È	È0­È	Èˆ	ÉßIÙ‹œ]Y[OÜÜ[ƒBˆÜ[ˆÛ\ÜÏH™š[˜[˜KY\İYÈ	Ù\İYßH‰Ù\İYËÕ\\Ø\ÙJ
+_OÜÜ[ƒBˆÙ]ƒBˆ]ˆÛ\ÜÏH™š[˜[˜K[[ÛÜÈƒBˆÜ[•İ[ˆİ›Û™Ï‰	Ù‹›[ÛÕİ[Ñš^Y
+Š_OÜİ›Û™ÏÜÜ[ƒBˆÜ[ÛØœ˜YÎˆİ›Û™Ï‰	ÜYØYËÑš^Y
+Š_OÜİ›Û™ÏÜÜ[ƒBˆÜ[”™\İNˆİ›Û™Ï‰	Ü™\İ[KÑš^Y
+Š_OÜİ›Û™ÏÜÜ[ƒBˆ	Ù‹™YÜ™\ÛÈÈÜ[‘YÜ™\ÛÈ˜\ÙNˆİ›Û™Ï‰	Ù‹™YÜ™\ÛËÑš^Y
+Š_OÜİ›Û™ÏÜÜ[˜ˆ	ÉßCBˆÙ]ƒBˆ	Ù‹™™XÚQ[™YØHÈ]ˆİ[OH™›Û\Ú^™NŒL\ØÛÛÜ˜\ŠK]^ÊH‘[™YØNˆ	Ù‹™™XÚQ[™YØ_OÙ]˜ˆ	ÉßCBˆ]ˆÛ\ÜÏH™š[˜[˜K\YÛÜÈƒBˆ	Ù‹œYÛÜË›X\
+Oˆ]ˆÛ\ÜÏH™š[˜[˜K\YÛËZ][HÜ[‰Ü™™XÚ_H0­È	Ü›Y]ÙßOÜÜ[Ü[ŠÈ		Ü›[ÛËÑš^Y
+Š_OÜÜ[Ù]˜
+Kš›Ú[Š	ÉÊ_CBˆÙ]ƒBˆ]ˆÛ\ÜÏH™š[˜[˜KYYÜ™\ÛÜÈˆİ[OH›X\™Ú[‹]ÜœƒBˆ	Ù‹™YÜ™\ÛÜÈ	‰ˆ‹™YÜ™\ÛÜË›[™İˆÈ	Ï]ˆİ[OH™›Û\Ú^™NŒLØÛÛÜ˜\ŠK]^ÊNÛX\™Ú[‹X›İÛN‘YÜ™\ÛÜÈYXÚ[Û˜[\ÎÙ]‰Èˆ	ÉßCBˆ	Ê‹™YÜ™\ÛÜÈ×JK›X\
+HOˆ]ˆÛ\ÜÏH™š[˜[˜K\YÛËZ][Hˆİ[OH˜ÛÛÜ˜\ŠK\™Y
+HÜ[‰ÙK™™XÚ_H0­È	ÙK˜ÛÛ˜Ù\È	ÑØ\İÉßOÜÜ[Ü[‹H		ÙK›[ÛËÑš^Y
+Š_OÜÜ[Ù]˜
+Kš›Ú[Š	ÉÊ_CBˆÙ]ƒBˆ]ˆÛ\ÜÏH™š[˜[˜KXXİ[ÛœÈƒBˆ]ÛˆÛ\ÜÏHœXˆˆÛ˜ÛXÚÏHœ™YÚ\İ˜\”YÛÊ	ÉÙ‹šYIÊHŠÈYÛÏØ]ÛƒBˆ]ÛˆÛ\ÜÏHœXˆˆİ[OH˜ÛÛÜ˜\ŠK\™Y
+HˆÛ˜ÛXÚÏHœ™YÚ\İ˜\‘YÜ™\ÛÊ	ÉÙ‹šYIÊH‹HYÜ™\ÛÏØ]ÛƒBˆ]ÛˆÛ\ÜÏHœXˆˆÛ˜ÛXÚÏH™Y]\‘š[˜[˜J	ÉÙ‹šYIÊH¸§#Ø]ÛƒBˆ]ÛˆÛ\ÜÏHœXˆˆİ[OH˜ÛÛÜ˜\ŠK\™Y
+HˆÛ˜ÛXÚÏH™[[Z[˜\‘š[˜[˜J	ÉÙ‹šYIÊH¼'åäOØ]ÛƒBˆÙ]ƒBˆÙ]˜ÃBˆJKš›Ú[Š	ÉÊNÃBŸCBƒB™[˜İ[Ûˆ›Ş[[ÜÕ™[˜Ú[ZY[ÜÊ
+HÃBˆÛÛœİŞHH™]È]J
+NÈŞKœÙ]İ\œÊ
+NÃBˆ]Ûİ[HÃBˆİ]K™š[˜[˜\Ë™›Ü‘XXÚ
+ˆOˆÃBˆYˆ
+Y‹™™XÚQ[™YØJH™]\›ÃBˆÛÛœİ™XÚHH™]È]J‹™™XÚQ[™YØH
+È	ÕŒŒ	ÊNÃBˆÛÛœİY™ˆHX]˜ÙZ[
+
+™XÚHHŞJHÈ
+NÃBˆYˆ
+Y™ˆH	‰ˆY™ˆHÊHÛİ[
+ÊÎÃBˆJNÃBˆ™]\›ˆÛİ[ÃBŸCBƒB™[˜İ[ÛˆÜ[‘š[˜[˜S[Ù[
+YH[
+HÃBˆÛÛœİÙ[XİHØİ[Y[™Ù][[Y[RY
+	Ù™‹XØ\ÙIÊNÃBˆÙ[Xİš[›™\’SH	ÏÜ[Ûˆ˜[YOHˆ”Ù[XØÚ[Û˜\ˆØ\ÛË‹‹ÛÜ[Û‰È
+ÃBˆİ]K˜Ø\Ù\Ë›X\
+ÈOˆÜ[Ûˆ˜[YOH‰ØËšYH‰ØË™ØİÜ’Y	ÔÒS‰ßH0­È	ØËœ]Y[H
+Ø\ÛÈÉØË™ØİÜ’YËœÛXÙJŠH	ÏÉßJOÛÜ[Û˜
+Kš›Ú[Š	ÉÊNÃBˆYˆ
+Y
+HÃBˆÛÛœİˆHİ]K™š[˜[˜\Ë™š[™
+OˆšYOOHY
+NÃBˆYˆ
+YŠH™]\›ÃBˆY][™Ñš[˜[˜RYHYÃBˆØİ[Y[™Ù][[Y[RY
+	Ùš[˜[˜S[Ù[]IÊK^ÛÛ[H	ÑY]\ˆ™YÚ\İ›ÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	Ùš[˜[˜TİX›Z]‰ÊK^ÛÛ[H	ÑİX\™\ˆØ[Xš[ÜÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	Ù™‹XØ\ÙIÊK˜[YHH‹˜Ø\ÙRY	ÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	Ù™‹[[ÛÉÊK˜[YHH‹›[ÛÕİ[ÃBˆØİ[Y[™Ù][[Y[RY
+	Ù™‹Y™XÚIÊK˜[YHH‹™™XÚQ[™YØH	ÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	Ù™‹[›İ\ÉÊK˜[YHH‹››İ\È	ÉÎÃBˆH[ÙHÃBˆY][™Ñš[˜[˜RYH[ÃBˆØİ[Y[™Ù][[Y[RY
+	Ùš[˜[˜S[Ù[]IÊK^ÛÛ[H	ÓY]›È™YÚ\İ›ÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	Ùš[˜[˜TİX›Z]‰ÊK^ÛÛ[H	ÑİX\™\‰ÎÃBˆØİ[Y[™Ù][[Y[RY
+	Ù™‹XØ\ÙIÊK˜[YHH	ÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	Ù™‹[[ÛÉÊK˜[YHH	ÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	Ù™‹Y™XÚIÊK˜[YHH	ÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	Ù™‹[›İ\ÉÊK˜[YHH	ÉÎÃBˆCBˆÜ[“[Ù[
+	Ùš[˜[˜S[Ù[	ÊNÃBŸCBƒB™[˜İ[ÛˆİX›Z]š[˜[˜J
+HÃBˆÛÛœİØ\ÙRYHØİ[Y[™Ù][[Y[RY
+	Ù™‹XØ\ÙIÊK˜[YNÃBˆÛÛœİ]Y[Hİ]K˜Ø\Ù\Ë™š[™
+ÈOˆËšYOOHØ\ÙRY
+OËœ]Y[	ÔÚ[ˆØ\ÛÉÎÃBˆÛÛœİØ\ÛÈHİ]K˜Ø\Ù\Ë™š[™
+ÈOˆËšYOOHØ\ÙRY
+NÃBˆÛÛœİØİÜ’YHØ\ÛÏË™ØİÜ’Y	ÉÎÃBˆÛÛœİ[ÛÕİ[H\œÙQ›Ø]
+Øİ[Y[™Ù][[Y[RY
+	Ù™‹[[ÛÉÊK˜[YJHÃBˆÛÛœİ™XÚQ[™YØHHØİ[Y[™Ù][[Y[RY
+	Ù™‹Y™XÚIÊK˜[YNÃBˆÛÛœİ›İ\ÈHØİ[Y[™Ù][[Y[RY
+	Ù™‹[›İ\ÉÊK˜[YKš[J
+NÃBˆYˆ
+Y][™Ñš[˜[˜RY
+HÃBˆÛÛœİˆHİ]K™š[˜[˜\Ë™š[™
+OˆšYOOHY][™Ñš[˜[˜RY
+NÃBˆYˆ
+ŠHÈ‹˜Ø\ÙRYHØ\ÙRYÈ‹œ]Y[H]Y[È‹›[ÛÕİ[H[ÛÕİ[È‹™™XÚQ[™YØHH™XÚQ[™YØNÈ‹››İ\ÈH›İ\ÎÈCBˆY][™Ñš[˜[˜RYH[ÃBˆH[ÙHÃBˆİ]K™š[˜[˜\Ëœ\Ú
+ÈYZY
+
+KØ\ÙRY]Y[[ÛÕİ[YÛÜÎ–×KYÜ™\ÛÜÎ–×K™XÚQ[™YØK›İ\ÈJNÃBˆCBˆÛÜÙS[Ù[
+	Ùš[˜[˜S[Ù[	ÊNÃBˆ™[™\[
+
+NÃBˆÚİÕØ\İ
+	Ô™YÚ\İ›ÈİX\™YÈ8§$ÉÊNÃBŸCBƒB™[˜İ[ÛˆY]\‘š[˜[˜JY
+HÈÜ[‘š[˜[˜S[Ù[
+Y
+NÈCBƒB™[˜İ[Ûˆ[[Z[˜\‘š[˜[˜JY
+HÃBˆYˆ
+XÛÛ™š\›J	ğ¯Ñ[[Z[˜\ˆ\İH™YÚ\İ›Èš[˜[˜ÚY\›ÏÉÊJH™]\›ÃBˆİ]K™š[˜[˜\ÈHİ]K™š[˜[˜\Ë™š[\ŠˆOˆ‹šYOOHY
+NÃBˆ™[™\[
+
+NÃBˆÚİÕØ\İ
+	Ô™YÚ\İ›È[[Z[˜YÉÊNÃBŸCBƒB™[˜İ[Ûˆ™YÚ\İ˜\”YÛÊY
+HÃBˆÛÛœİˆHİ]K™š[˜[˜\Ë™š[™
+OˆšYOOHY
+NÃBˆYˆ
+YŠH™]\›ÃBˆYÛÑš[˜[˜RYHYÃBˆØİ[Y[™Ù][[Y[RY
+	ÙœXØ\ÛÉÊK^ÛÛ[H‹œ]Y[ÃBˆØİ[Y[™Ù][[Y[RY
+	Ùœ[[ÛÉÊK˜[YHH	ÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	ÙœY™XÚIÊK˜[YHH™]È]J
+KÒTÓÔİš[™Ê
+KœÛXÙJL
+NÃBˆØİ[Y[™Ù][[Y[RY
+	Ùœ[Y]ÙÉÊK˜[YHH	ÑY™Xİ]›ÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	Ùœ[›İ\ÉÊK˜[YHH	ÉÎÃBˆÜ[“[Ù[
+	ÜYÛÓ[Ù[	ÊNÃBˆ[ÙÑYÜ™\ÛÈH˜[ÙNÃBŸCBƒB™[˜İ[ÛˆÛÛ™š\›X\”YÛÊ
+HÃBˆÛÛœİ[ÛÈH\œÙQ›Ø]
+Øİ[Y[™Ù][[Y[RY
+	Ùœ[[ÛÉÊK˜[YJHÃBˆYˆ
+[ÛÈH
+HÈ[\
+	Ò[™Ü™\ğèH[ˆ[ÛÈ°è[YÉÊNÈ™]\›ÈCBˆÛÛœİˆHİ]K™š[˜[˜\Ë™š[™
+OˆšYOOHYÛÑš[˜[˜RY
+NÃBˆYˆ
+YŠH™]\›ÃBˆYˆ
+[ÙÑYÜ™\ÛÊHÃBˆ‹™YÜ™\ÛÜÈH‹™YÜ™\ÛÜÈ×NÃBˆ‹™YÜ™\ÛÜËœ\Ú
+ÃBˆ™XÚNˆØİ[Y[™Ù][[Y[RY
+	ÙœY™XÚIÊK˜[YKBˆ[ÛËBˆÛÛ˜Ù\ÎˆØİ[Y[™Ù][[Y[RY
+	Ùœ[Y]ÙÉÊK˜[YKBˆ›İ\ÎˆØİ[Y[™Ù][[Y[RY
+	Ùœ[›İ\ÉÊK˜[YKš[J
+CBˆJNÃBˆH[ÙHÃBˆ‹œYÛÜËœ\Ú
+ÃBˆ™XÚNˆØİ[Y[™Ù][[Y[RY
+	ÙœY™XÚIÊK˜[YKBˆ[ÛËBˆY]ÙÎˆØİ[Y[™Ù][[Y[RY
+	Ùœ[Y]ÙÉÊK˜[YKBˆ›İ\ÎˆØİ[Y[™Ù][[Y[RY
+	Ùœ[›İ\ÉÊK˜[YKš[J
+CBˆJNÃBˆCBˆÛÜÙS[Ù[
+	ÜYÛÓ[Ù[	ÊNÃBˆ™[™\[
+
+NÃBˆÚİÕØ\İ
+[ÙÑYÜ™\ÛÈÈ	ÑYÜ™\ÛÈ™YÚ\İ˜YÉÈˆ	ÔYÛÈ™YÚ\İ˜YÉÊNÃBˆ[ÙÑYÜ™\ÛÈH˜[ÙNÃBŸCBƒB™[˜İ[Ûˆ™YÚ\İ˜\‘YÜ™\ÛÊY
+HÃBˆÛÛœİˆHİ]K™š[˜[˜\Ë™š[™
+OˆšYOOHY
+NÃBˆYˆ
+YŠH™]\›ÃBˆYÛÑš[˜[˜RYHYÃBˆØİ[Y[™Ù][[Y[RY
+	ÙœXØ\ÛÉÊK^ÛÛ[H	ÑYÜ™\ÛÎˆ	È
+È‹œ]Y[ÃBˆØİ[Y[™Ù][[Y[RY
+	Ùœ[[ÛÉÊK˜[YHH	ÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	ÙœY™XÚIÊK˜[YHH™]È]J
+KÒTÓÔİš[™Ê
+KœÛXÙJL
+NÃBˆØİ[Y[™Ù][[Y[RY
+	Ùœ[Y]ÙÉÊK˜[YHH	Õ˜\š[ÜÉÎÃBˆØİ[Y[™Ù][[Y[RY
+	Ùœ[›İ\ÉÊK˜[YHH	ÉÎÃBˆÜ[“[Ù[
+	ÜYÛÓ[Ù[	ÊNÃBˆ[ÙÑYÜ™\ÛÈHYNÃBŸCBƒB‹ËÈOOOOOOOOOOOOOOOOOOOHÕP’QHÕ
+İ\X˜\ÙJHOOOOOOOOOOOOOOOOOOOCB˜\Ş[˜È[˜İ[Ûˆ[™TÕ›Ü
+JHÃBˆKœ™]™[Y˜][
+
+NÃBˆØİ[Y[™Ù][[Y[RY
+	Üİ›Ü›Û™IÊK˜Û\ÜÓ\İœ™[[İ™J	Ù˜YÛİ™\‰ÊNÃBˆÛÛœİš[\ÈHK™]U˜[œÙ™\‹™š[\ÎÃBˆYˆ
+š[\Ë›[™İ
+H]ØZ]›ØÙ\ÜÔÕš[\Êš[\ÊNÃBŸCBƒB˜\Ş[˜È[˜İ[Ûˆ[™TÕš[\Ê[œ]š[\ÊHÃBˆ]ØZ]›ØÙ\ÜÔÕš[\Ê[œ]š[\ÊNÃBŸCBƒB˜\Ş[˜È[˜İ[Ûˆ›ØÙ\ÜÔÕš[\Êš[\ÊHÃBˆÛÛœİš[S\İH\œ˜^K™œ›ÛJš[\ÊK™š[\ŠˆOˆ‹›˜[YKÓİÙ\Ø\ÙJ
+K™[™ÕÚ]
+	Ëœİ	ÊJNÃBˆYˆ
+Yš[S\İ›[™İ
+HÈÚİÕØ\İ
+	ÔÛÛÈÙH\›Z][ˆ\˜Ú]›ÜÈœİ	ÊNÈ™]\›ÈCBˆİš[\ÈH×NÃBˆÛÛœİ™YÙ^HÖËW××JX[™X›_X^[JVËW××JŠ
+ÊWœİ	ÚNÃBˆÛÛœİ\œÙYHÈİ\ˆßK[™ˆßHNÃBˆ›Üˆ
+ÛÛœİš[HÙˆš[S\İ
+HÃBˆÛÛœİX]ÚHš[K›˜[YK›X]Ú
+™YÙ^
+NÃBˆYˆ
+[X]Ú
+HÈÚİÕØ\İ
+›Ü›X]È[˜ÛÜœ™XİÎˆ	Ùš[K›˜[Y_X
+NÈÛÛ[YNÈCBˆÛÛœİ\˜ÈHX]ÚÌWKÓİÙ\Ø\ÙJ
+HOOH	ÛX^[IÈÈ	Üİ\	Èˆ	Ú[™‰ÎÃBˆÛÛœİİ\H\œÙR[
+X]ÚÌ—JNÃBˆYˆ
+\\œÙYØ\˜×VÜİ\JH\œÙYØ\˜×VÜİ\HHš[NÃBˆCBˆ›Üˆ
+ÛÛœİØ\˜Ëİ\×HÙˆØš™Xİ™[šY\Ê\œÙY
+JHÃBˆ›Üˆ
+ÛÛœİÜİ\š[WHÙˆØš™Xİ™[šY\Êİ\ÊJHÃBˆİš[\Ëœ\Ú
+Èš[K\˜Ëİ\ˆ\œÙR[
+İ\
+HJNÃBˆCBˆCBˆÛÛœİİ\X^HØš™XİšÙ^\Ê\œÙYœİ\
+K›X\
+[X™\ŠKœÛÜ
+
+KŠOO˜‹XJVÌHÏÈLNÃBˆÛÛœİ[™“X^HØš™XİšÙ^\Ê\œÙYš[™ŠK›X\
+[X™\ŠKœÛÜ
+
+KŠOO˜‹XJVÌHÏÈLNÃBˆYˆ
+İ\X^H
+HØİ[Y[™Ù][[Y[RY
+	Ù‹\İ\	ÊK˜[YHHİ\X^
+ÈNÃBˆYˆ
+[™“X^H
+HØİ[Y[™Ù][[Y[RY
+	Ù‹Z[™‰ÊK˜[YHH[™“X^
+ÈNÃBƒBˆ][H	ÉÎÃBˆYˆ
+Øš™XİšÙ^\Ê\œÙYœİ\
+K›[™İ
+H[
+ÏH]¸¥¬ˆİ\\š[Üˆ	ÓØš™XİšÙ^\Ê\œÙYœİ\
+K›X\
+[X™\ŠKœÛÜ
+
+KŠOO˜KXŠKš›Ú[Š	Ë	Ê_OÙ]˜ÃBˆYˆ
+Øš™XİšÙ^\Ê\œÙYš[™ŠK›[™İ
+H[
+ÏH]¸¥¯[™™\š[Üˆ	ÓØš™XİšÙ^\Ê\œÙYš[™ŠK›X\
+[X™\ŠKœÛÜ
+
+KŠOO˜KXŠKš›Ú[Š	Ë	Ê_OÙ]˜ÃBˆØİ[Y[™Ù][[Y[RY
+	Üİ™]šY]ÉÊKš[›™\’SH[	Óš[™ğî›ˆ\˜Ú]›È°è[YÉÎÃBˆÚİÕØ\İ
+	Üİš[\Ë›[™İH\˜Ú]›ÜÈ\İÜØ
+NÃBŸCBƒB˜\Ş[˜È[˜İ[Ûˆ\ØYÕš[\ÊØ\ÙRY
+HÃBˆYˆ
+\İš[\Ë›[™İ
+H™]\›ÃBˆÛÛœİÈHİ]K˜Ø\Ù\Ë™š[™
+OˆšYOOHØ\ÙRY
+NÃBˆYˆ
+XÊH™]\›ÃBˆ›Üˆ
+ÛÛœİÙš[K\˜Ëİ\HÙˆİš[\ÊHÃBˆÛÛœİ]H	ØØ\ÙRYKÉØ\˜ßKÉÜİ\KœİÃBˆÛÛœİÈ\œ›ÜˆHH]ØZ]İ\X˜\ÙPÛY[œİÜ˜YÙK™œ›ÛJ	ÜİYš[\ÉÊK\ØY
+]š[KÈ\Ù\ˆYHJNÃBˆYˆ
+\œ›ÜŠHÈÛÛœÛÛK™\œ›ÜŠ	Ñ\œ›Üˆ[İXš\ˆÕ‰Ë\œ›ÜŠNÈÛÛ[YNÈCBˆÛÛœİÈ]Nˆ\›]HHHİ\X˜\ÙPÛY[œİÜ˜YÙK™œ›ÛJ	ÜİYš[\ÉÊK™Ù]X›XÕ\›
+]
+NÃBˆYˆ
+XË˜\˜ØY\ÖØ\˜×Kœİ\›ÊHË˜\˜ØY\ÖØ\˜×Kœİ\›ÈHßNÃBˆË˜\˜ØY\ÖØ\˜×Kœİ\›ÖÜİ\HH\›]KœX›XÕ\›ÃBˆCBˆİš[\ÈH×NÃBˆØİ[Y[™Ù][[Y[RY
+	Üİ™]šY]ÉÊKš[›™\’SH	ÉÎÃBŸCBƒB‹ËÈOOOOOOOOOOOOOOOOOOOHÕP’QHœÈ
+İ\X˜\ÙJHOOOOOOOOOOOOOOOOOOOCB˜\Ş[˜È[˜İ[Ûˆ[™T‘›Ü
+JHÃBˆKœ™]™[Y˜][
+
+NÃBˆØİ[Y[™Ù][[Y[RY
+	Ü‘›Ü›Û™IÊK˜Û\ÜÓ\İœ™[[İ™J	Ù˜YÛİ™\‰ÊNÃBˆÛÛœİš[\ÈHK™]U˜[œÙ™\‹™š[\ÎÃBˆYˆ
+š[\Ë›[™İ
+H]ØZ]›ØÙ\ÜÔ‘š[\Êš[\ÊNÃBŸCBƒB˜\Ş[˜È[˜İ[Ûˆ[™T‘š[\Ê[œ]š[\ÊHÃBˆ]ØZ]›ØÙ\ÜÔ‘š[\Ê[œ]š[\ÊNÃBŸCBƒB˜\Ş[˜È[˜İ[Ûˆ›ØÙ\ÜÔ‘š[\Êš[\ÊHÃBˆÛÛœİš[S\İH\œ˜^K™œ›ÛJš[\ÊK™š[\ŠˆOˆ‹›˜[YKÓİÙ\Ø\ÙJ
+K™[™ÕÚ]
+	Ëœ‰ÊJNÃBˆYˆ
+Yš[S\İ›[™İ
+HÈÚİÕØ\İ
+	ÔÛÛÈÙH\›Z][ˆ\˜Ú]›ÜÈœ‰ÊNÈ™]\›ÈCBˆYˆ
+š[S\İ›[™İˆÊHÈÚİÕØ\İ
+	Ópè^[[ÈÈ\˜Ú]›ÜÈ‰ÊNÈ™]\›ÈCBˆ‘š[\ÈHš[S\İ›X\
+š[HOˆ
+Èš[HJJNÃBˆØİ[Y[™Ù][[Y[RY
+	Ü”™]šY]ÉÊKš[›™\’SH‘š[\Ë›X\
+ˆOˆ<'äá	Ù‹™š[K›˜[Y_X
+Kš›Ú[Š	Ïœ‰ÊNÃBˆÚİÕØ\İ
+	Ü‘š[\Ë›[™İHŠÊH\İÜØ
+NÃBŸCBƒB˜\Ş[˜È[˜İ[Ûˆ\ØY‘š[\ÊØ\ÙRY
+HÃBˆYˆ
+\‘š[\Ë›[™İ
+H™]\›ÃBˆÛÛœİÈHİ]K˜Ø\Ù\Ë™š[™
+OˆšYOOHØ\ÙRY
+NÃBˆYˆ
+XÊH™]\›ÃBˆYˆ
+XËœ•\›ÊHËœ•\›ÈH×NÃBˆ›Üˆ
+ÛÛœİÙš[_HÙˆ‘š[\ÊHÃBˆÛÛœİ]HœËÉØØ\ÙRYKÉÙš[K›˜[Y_XÃBˆÛÛœİÈ\œ›ÜˆHH]ØZ]İ\X˜\ÙPÛY[œİÜ˜YÙK™œ›ÛJ	ÜİYš[\ÉÊK\ØY
+]š[KÈ\Ù\ˆYHJNÃBˆYˆ
+Y\œ›ÜŠHÃBˆÛÛœİÈ]Nˆ\›]HHHİ\X˜\ÙPÛY[œİÜ˜YÙK™œ›ÛJ	ÜİYš[\ÉÊK™Ù]X›XÕ\›
+]
+NÃBˆËœ•\›Ëœ\Ú
+È˜[YNˆš[K›˜[YK\›ˆ\›]KœX›XÕ\›JNÃBˆH[ÙHÛÛœÛÛK™\œ›ÜŠ	Ñ\œ›Üˆ[İXš\ˆ‰Ë\œ›ÜŠNÃBˆCBˆ‘š[\ÈH×NÃBˆØİ[Y[™Ù][[Y[RY
+	Ü”™]šY]ÉÊKš[›™\’SH	ÉÎÃBŸCBƒB‹ËÈOOOOOOOOOOOOOOOOOOOHU‘QĞPÒpäÓˆHSÑSTÈOOOOOOOOOOOOOOOOOOOCB™[˜İ[ÛˆİÚ]ÚšY]Ê‹[
+HÃBˆØİ[Y[œ]Y\TÙ[XİÜ[
+	Ë™\ÚİÜ[˜]ˆX‹˜›˜]‹Z][IÊK™›Ü‘XXÚ
+ˆOˆ‹˜Û\ÜÓ\İœ™[[İ™J	ØXİ]™IÊJNÃBˆYŠ[
+H[˜Û\ÜÓ\İ˜Y
+	ØXİ]™IÊNÃBˆÉÚØ[˜˜[‰Ë	ØØ\ÛÜÉË	ÜİØÚÉË	İ\™X\ÉË	Ùš[˜[˜\É×K™›Ü‘XXÚ
+OˆØİ[Y[™Ù][[Y[RY
+	İšY]ËIÊŞ
+Kœİ[K™\Ü^HHOO]ˆÈ	ÉÈˆ	Û›Û™IÊNÃBˆÛÛœİX™[ÈHÚØ[˜˜[‰Ô›ÙXØÚpìÛ‰ËØ\ÛÜÎ‰ĞØ\ÛÜÉËİØÚÎ‰ÓX]\šX[\ÉË\™X\Î‰Õ˜X˜Z›ÈX\š[ÉËš[˜[˜\Î‰Ñš[˜[˜\ÉßNÃBˆÛÛœİXİ[ÛœÈHÜİØÚÎÛX™[‰ûï"ÈYÜ™YØ\ˆX]\šX[	Ë[›Ü[”İØÚÓ[Ù[Kš[˜[˜\ÎÛX™[‰ûï"ÈY]›È™YÚ\İ›ÉË[›Ü[‘š[˜[˜S[Ù[_NÃBˆÛÛœİÜ˜\“X™[HØİ[Y[™Ù][[Y[RY
+	İÜ˜\“X™[	ÊNÃBˆYˆ
+Ü˜\“X™[
+HÜ˜\“X™[^ÛÛ[HX™[Öİ—H	Ğ[YÛ™\“ÔÉÎÃBˆÛÛœİ™]Ğ]ÛˆHØİ[Y[œ]Y\TÙ[XİÜŠ	ËÜ˜\ˆ˜‹[™]ÉÊNÃBˆYˆ
+™]Ğ]ÛŠH™]Ğ]Û‹š[›™\’SHXİ[ÛœÖİ—HÈXİ[ÛœÖİ—K›X™[ˆ	ÏÜ[»ï"ÏÜÜ[ˆY]›ÈØ\ÛÉÎÃBˆYˆ
+™]Ğ]ÛŠH™]Ğ]Û‹›Û˜ÛXÚÈHXİ[ÛœÖİ—HÈXİ[ÛœÖİ—Kœ[ˆˆÜ[“™]ĞØ\ÙNÃBˆÛÛœİ˜XˆHØİ[Y[œ]Y\TÙ[XİÜŠ	Ë™˜X‰ÊNÃBˆYˆ
+˜XŠHÃBˆ˜X‹^ÛÛ[H	ûï"ÉÎÃBˆ˜X‹œÙ]]šX]J	Ø\šXK[X™[	ËXİ[ÛœÖİ—HÈXİ[ÛœÖİ—K›X™[œ™\XÙJ	ûï"È	Ë	ÉÊHˆ	ÓY]›ÈØ\ÛÉÊNÃBˆ˜X‹›Û˜ÛXÚÈHXİ[ÛœÖİ—HÈXİ[ÛœÖİ—Kœ[ˆˆÜ[“™]ĞØ\ÙNÃBˆCBˆYˆ
+ˆOOH	İ\™X\ÉÊH™[™\‘Z[U\ÚÜÊ
+NÃBˆYˆ
+ˆOOH	Ùš[˜[˜\ÉÊH™[™\‘š[˜[˜\Ê
+NÃBŸCB™[˜İ[ÛˆÙ]š[\Š‹[
+HÈİ]KšÑš[\YÈØİ[Y[œ]Y\TÙ[XİÜ[
+	ÈİšY]ËZØ[˜˜[ˆ™š[\‹X‰ÊK™›Ü‘XXÚ
+O˜‹˜Û\ÜÓ\İœ™[[İ™J	ØXİ]™IÊJNÈ[˜Û\ÜÓ\İ˜Y
+	ØXİ]™IÊNÈ™[™\’Ø[˜˜[Š
+NÈCB™[˜İ[ÛˆÙ]Ø\ÛÜÑš[\Š‹[
+HÈİ]K˜Ñš[\YÈØİ[Y[œ]Y\TÙ[XİÜ[
+	ÈİšY]ËXØ\ÛÜÈ™š[\‹X‰ÊK™›Ü‘XXÚ
+O˜‹˜Û\ÜÓ\İœ™[[İ™J	ØXİ]™IÊJNÈ[˜Û\ÜÓ\İ˜Y
+	ØXİ]™IÊNÈ™[™\Ø\Ù\Ê
+NÈCB™[˜İ[ÛˆÙÙÛPØ\ÙJY
+HÈÛÛœİÈHİ]K˜Ø\Ù\Ë™š[™
+OšYOOZY
+NÈYŠÊ^ÈË›Ü[HXË›Ü[ÈÛX\”Ù[Xİ[ÛŠ
+NÈ™[™\Ø\Ù\Ê
+NÈHCBƒB™[˜İ[ÛˆÜ[“[Ù[
+Y
+HÈØİ[Y[™Ù][[Y[RY
+Y
+K˜Û\ÜÓ\İ˜Y
+	ÛÜ[‰ÊNÈØİ[Y[˜›ÙK˜Û\ÜÓ\İ˜Y
+	Û[Ù[[Ü[‰ÊNÈCB™[˜İ[ÛˆÛÜÙS[Ù[
+Y
+HÈØİ[Y[™Ù][[Y[RY
+Y
+K˜Û\ÜÓ\İœ™[[İ™J	ÛÜ[‰ÊNÈYŠYØİ[Y[œ]Y\TÙ[XİÜŠ	Ë›[Ù[[İ™\›^K›Ü[‰ÊJHØİ[Y[˜›ÙK˜Û\ÜÓ\İœ™[[İ™J	Û[Ù[[Ü[‰ÊNÈCB™Øİ[Y[˜Y]™[\İ[™\Š	ÚÙ^YİÛ‰ËHOˆÈYŠKšÙ^OOOIÑ\ØØ\IÊHÈØİ[Y[œ]Y\TÙ[XİÜ[
+	Ë›[Ù[[İ™\›^K›Ü[‰ÊK™›Ü‘XXÚ
+OO›K˜Û\ÜÓ\İœ™[[İ™J	ÛÜ[‰ÊJNÈØİ[Y[˜›ÙK˜Û\ÜÓ\İœ™[[İ™J	Û[Ù[[Ü[‰ÊNÈHJNÃB™Øİ[Y[˜Y]™[\İ[™\Š	ØÛXÚÉËHOˆÈYŠK\™Ù]˜Û\ÜÓ\İ˜ÛÛZ[œÊ	Û[Ù[[İ™\›^IÊJHÈK\™Ù]˜Û\ÜÓ\İœ™[[İ™J	ÛÜ[‰ÊNÈYŠYØİ[Y[œ]Y\TÙ[XİÜŠ	Ë›[Ù[[İ™\›^K›Ü[‰ÊJHØİ[Y[˜›ÙK˜Û\ÜÓ\İœ™[[İ™J	Û[Ù[[Ü[‰ÊNÈHJNÃBƒB›]Ø\İÃB™[˜İ[ÛˆÚİÕØ\İ
+\ÙÊHÃBˆÛÛœİHØİ[Y[™Ù][[Y[RY
+	İØ\İ	ÊNÃBˆ^ÛÛ[H\ÙÎÈ˜Û\ÜÓ\İ˜Y
+	ÜÚİÉÊNÃBˆÛX\•[Y[İ]
+Ø\İ
+NÃBˆØ\İHÙ][Y[İ]
+
+
+HOˆ˜Û\ÜÓ\İœ™[[İ™J	ÜÚİÉÊKL
+NÃBŸCBƒB‹ËÈOOOOOOOOOOOOOOOOOOOHS’PÒPTˆOOOOOOOOOOOOOOOOOOOCB™Øİ[Y[™Ù][[Y[RY
+	Ø›‹ZØ[˜˜[‰ÊK˜Û\ÜÓ\İ˜Y
+	ØXİ]™IÊNÃB›ØYİ]J
+NÃBœ™[™\[
+
+NÃBœÙ]\š\™X˜\ÙS\İ[™\Š
+NÃBœ™\]Y\İ›İYšXØ][Û”\›Z\ÜÚ[ÛŠ
+NÃB
