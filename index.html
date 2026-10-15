@@ -64,7 +64,7 @@
       <button class="filter-btn" onclick="setFilter('proximo',this)">Próximos</button>
       <button class="filter-btn" onclick="setFilter('sup',this)">Superior</button>
       <button class="filter-btn" onclick="setFilter('inf',this)">Inferior</button>
-      <input class="filter-input" type="text" id="patientFilterInput" placeholder="Paciente..." oninput="filterByPatient()">
+      <input class="filter-input" type="search" id="patientFilterInput" placeholder="Paciente o doctor..." aria-label="Buscar por paciente o doctor" oninput="filterByPatient()">
     </div>
     <div class="kanban-wrap"><div class="kanban" id="kanban"></div></div>
   </div>
